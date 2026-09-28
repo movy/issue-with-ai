@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A static observatory of issue activity in OpenAI Codex and Anthropic Claude Code." />
+    <title>Issue with AI — issue activity observatory</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="eyebrow">OPEN SOURCE SIGNALS / ISSUE ACTIVITY</div>
+      <h1>Issue with AI</h1>
+      <p class="lede">A calm, source-linked view of how two prominent coding-agent repositories evolve over time.</p>
+      <div class="header-meta" id="snapshot-meta">Loading snapshot metadata…</div>
+    </header>
+
+    <main>
+      <section class="intro-card" aria-labelledby="reading-title">
+        <div>
+          <div class="eyebrow">HOW TO READ THIS</div>
+          <h2 id="reading-title">Activity, not a scoreboard</h2>
+        </div>
+        <p>Bars show issues opened and closed per UTC day. The lower area chart shows the number of issues still unclosed at each day’s close. Release and model events are annotations only; they are not claims about causality or product quality.</p>
+      </section>
+
+      <div id="repo-sections" class="repo-sections" aria-live="polite"></div>
+    </main>
+
+    <footer class="site-footer">
+      <span>Built from a committed GitHub API snapshot. No runtime API calls.</span>
+      <a href="https://github.com/openai/codex/issues">Codex issues</a>
+      <a href="https://github.com/anthropics/claude-code/issues">Claude Code issues</a>
+    </footer>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

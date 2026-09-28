@@ -1,0 +1,16 @@
+{
+  "name": "issue-with-ai",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Static GitHub issue activity charts for Codex and Claude Code.",
+  "type": "module",
+  "scripts": {
+    "collect": "node scripts/collect-github-data.mjs",
+    "check": "node scripts/validate-snapshot.mjs",
+    "dev": "python3 -m http.server 4173",
+    "preview": "python3 -m http.server 4173"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
