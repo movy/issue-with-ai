@@ -1,8 +1,8 @@
 const chartColors = {
-  opened: "#d4507a",
-  closed: "#1f8f4d",
-  outstanding: "#7951a8",
-  outstandingFill: "#dcd0eb",
+  opened: "#bc4c00",
+  closed: "#8250df",
+  outstanding: "#d73a4a",
+  outstandingFill: "#f7d4d7",
   grid: "#e5dfd5",
   axis: "#89918e",
   ink: "#17202a"
@@ -20,6 +20,7 @@ const PLOT_HEIGHT = 270;
 const FLOW_HEIGHT = 46;
 const FLOW_GAP = 26;
 const LANE_HEIGHT = 30;
+const MAX_PX_PER_DAY = 24;
 
 const parseDate = value => new Date(`${value}T00:00:00Z`);
 const dayNumber = value => parseDate(value).getTime() / 86400000;
@@ -229,21 +230,21 @@ function verdictSummary(models) {
 
 // ---------- chart ----------
 
-function flagLabel(moment) {
-  if (moment.type === "swing") return { name: "No release", delta: signed(moment.delta) };
-  const name = moment.names.length > 1 ? `${moment.names[0]} +${moment.names.length - 1}` : moment.names[0];
-  return { name, delta: signed(moment.delta) };
+// the model shipped that day; a moment with several releases shows the first plus a count
+function flagLabel(moment, maxChars = Infinity) {
+  if (moment.type === "swing") return "No release";
+  const first = moment.names[0].length > maxChars ? `${moment.names[0].slice(0, maxChars - 1).trimEnd()}…` : moment.names[0];
+  return moment.names.length > 1 ? `${first} +${moment.names.length - 1}` : first;
 }
 
-// flags try "name + change", then "change" only, then just the number, whichever fits in 4 lanes
+// flags try the full model name, then a shortened one, then just the number, whichever fits in 4 lanes
 function layoutFlags(model, xForIndex, plotLeft, plotRight) {
   const place = mode => {
     const laneEnds = [];
     const flags = model.all.map(moment => {
       const x = xForIndex(moment.i0);
-      const full = flagLabel(moment);
-      const label = mode === "full" ? full : mode === "delta" ? { name: "", delta: full.delta } : null;
-      const width = !label ? 26 : 30 + (label.name ? textWidth(label.name) + 6 : 0) + textWidth(label.delta, "800 12px Inter, system-ui, sans-serif") + 10;
+      const label = mode === "full" ? flagLabel(moment) : mode === "short" ? flagLabel(moment, 9) : null;
+      const width = !label ? 26 : 30 + textWidth(label) + 10;
       const left = clamp(x - 13, plotLeft - 8, plotRight + 8 - width);
       let lane = laneEnds.findIndex(end => left - end > 5);
       if (lane === -1) lane = laneEnds.length;
@@ -252,7 +253,7 @@ function layoutFlags(model, xForIndex, plotLeft, plotRight) {
     });
     return { flags, lanes: Math.max(1, laneEnds.length) };
   };
-  for (const mode of ["full", "delta"]) {
+  for (const mode of ["full", "short"]) {
     const layout = place(mode);
     if (layout.lanes <= 4) return layout;
   }
@@ -276,7 +277,7 @@ function chartSvg(state) {
   const outstandingMax = Math.max(1, ...days.map(day => day.unclosed)) * 1.08;
   const flowHeight = value => Math.min(1, value / dailyMax) * FLOW_HEIGHT;
   const yOutstanding = value => plotBottom - (value / outstandingMax) * PLOT_HEIGHT;
-  const barWidth = Math.max(.8, Math.min(4, pxPerDay * .75));
+  const barWidth = Math.max(.8, Math.min(8, pxPerDay * .75));
   Object.assign(state, { width, plotTop, plotBottom, flowMid, flowBottom, dailyMax, xForIndex });
 
   const grid = [0, .25, .5, .75, 1].map(ratio => {
@@ -328,13 +329,13 @@ function chartSvg(state) {
     const aria = moment.type === "swing"
       ? `Swing with no release: ${signed(moment.delta)} open issues from ${dateLabel(moment.date)}`
       : `Release ${moment.n} of ${moment.of}: ${moment.names.join(", ")} on ${dateLabel(moment.date)}. ${verdict.word}: ${signed(moment.delta)} open issues in ${moment.span} days`;
-    return `<g class="release-flag kind-${moment.kind}" data-moment="${esc(moment.id)}" tabindex="0" role="button" aria-label="${esc(aria)}"><line class="flag-stem" x1="${x}" x2="${x}" y1="${top + 22}" y2="${plotTop}" stroke="${badgeColor}"${moment.type === "swing" ? ` stroke-dasharray="3 3"` : ""}/><rect class="flag-body" x="${left}" y="${top}" width="${width}" height="22" rx="11" stroke="${verdict.color}"/><circle cx="${circleX}" cy="${top + 11}" r="9" fill="${badgeColor}"/><text class="flag-badge" x="${circleX}" y="${top + 15}" text-anchor="middle">${esc(badge)}</text>${label ? `<text class="flag-text" x="${left + 28}" y="${top + 15.5}">${label.name ? `<tspan dx="0">${esc(label.name)}</tspan>` : ""}<tspan dx="${label.name ? 6 : 0}" fill="${verdict.color}" font-weight="800">${esc(label.delta)}</tspan></text>` : ""}</g>`;
+    return `<g class="release-flag kind-${moment.kind}" data-moment="${esc(moment.id)}" tabindex="0" role="button" aria-label="${esc(aria)}"><line class="flag-stem" x1="${x}" x2="${x}" y1="${top + 22}" y2="${plotTop}" stroke="${badgeColor}"${moment.type === "swing" ? ` stroke-dasharray="3 3"` : ""}/><rect class="flag-body" x="${left}" y="${top}" width="${width}" height="22" rx="11" stroke="${verdict.color}"/><circle cx="${circleX}" cy="${top + 11}" r="9" fill="${badgeColor}"/><text class="flag-badge" x="${circleX}" y="${top + 15}" text-anchor="middle">${esc(badge)}</text>${label ? `<text class="flag-text" x="${left + 28}" y="${top + 15.5}">${esc(label)}</text>` : ""}</g>`;
   }).join("");
 
   const hitAreas = days.map((day, index) => `<rect class="chart-hitarea" x="${plotLeft + index * pxPerDay}" y="${plotTop}" width="${pxPerDay}" height="${flowBottom - plotTop}" tabindex="-1" data-index="${index}"></rect>`).join("");
 
   const label = `${model.name}: open issues over time, daily opened and closed issues, and ${model.moments.length} release moments`;
-  return `<svg class="chart" role="img" aria-label="${esc(label)}" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${grid}<g class="windows">${windows}</g>${flowFrame}${bars}<polygon class="outstanding-area" points="${area}" fill="${chartColors.outstandingFill}" opacity=".85"/><polyline class="outstanding-line" points="${points}" fill="none" stroke="${chartColors.outstanding}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>${releaseLines}${monthTicks}${flagMarkup}<line class="chart-crosshair" x1="0" x2="0" y1="${plotTop}" y2="${flowBottom}" stroke="${chartColors.ink}" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="4 4" pointer-events="none"/><g class="hitareas">${hitAreas}</g></svg>`;
+  return `<svg class="chart" role="img" aria-label="${esc(label)}" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${grid}<g class="windows">${windows}</g>${flowFrame}${bars}<polygon class="outstanding-area" points="${area}" fill="${chartColors.outstandingFill}" opacity=".85"/><polyline class="outstanding-line" points="${points}" fill="none" stroke="${chartColors.outstanding}" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>${releaseLines}${monthTicks}${flagMarkup}<line class="chart-crosshair" x1="0" x2="0" y1="${plotTop}" y2="${flowBottom}" stroke="${chartColors.ink}" stroke-width="1.2" stroke-opacity=".5" stroke-dasharray="4 4" pointer-events="none"/><g class="hitareas">${hitAreas}</g><g class="drag-select" display="none" pointer-events="none"><rect class="drag-band" x="0" y="${plotTop}" width="0" height="${flowBottom - plotTop}"/><text class="drag-label" x="0" y="${plotTop + 18}" text-anchor="middle"></text></g></svg>`;
 }
 
 // left: open issues (rescales to the visible range) · right: the daily flow strip
@@ -367,11 +368,21 @@ function fitPxPerDay(state) {
 
 function zoomTo(state, pxPerDay, anchorPx = state.scroll.clientWidth / 2) {
   const fit = fitPxPerDay(state);
-  const next = clamp(pxPerDay, fit, 9);
+  const next = clamp(pxPerDay, fit, MAX_PX_PER_DAY);
   const anchorDay = (state.scroll.scrollLeft + anchorPx - PAD.left) / state.pxPerDay;
   state.fit = next <= fit + 1e-6;
   state.pxPerDay = next;
   renderChart(state, { anchorDay, anchorPx });
+}
+
+// fit days [start, end) into the plot area; very short ranges hit the zoom cap and are centred
+function zoomToRange(state, start, end) {
+  const fit = fitPxPerDay(state);
+  const width = state.scroll.clientWidth;
+  const next = clamp((width - PAD.left - PAD.right) / (end - start), fit, MAX_PX_PER_DAY);
+  state.fit = next <= fit + 1e-6;
+  state.pxPerDay = next;
+  renderChart(state, { anchorDay: (start + end) / 2, anchorPx: (PAD.left + width - PAD.right) / 2 });
 }
 
 function updateOutstandingScale(state) {
@@ -481,7 +492,62 @@ function bindChart(state, tooltip) {
   const { scroll } = state;
   const crosshair = () => scroll.querySelector(".chart-crosshair");
   const momentById = id => state.model.all.find(item => item.id === id);
+
+  // drag across the plot to zoom to that stretch, as on a finance chart
+  let drag = null;
+  const dayAt = clientX => clamp((clientX - scroll.getBoundingClientRect().left + scroll.scrollLeft - PAD.left) / state.pxPerDay, 0, state.model.days.length);
+  const dragRange = () => {
+    const start = clamp(Math.floor(Math.min(drag.from, drag.to)), 0, state.model.days.length - 1);
+    return { start, end: Math.max(start + 1, Math.ceil(Math.max(drag.from, drag.to))) };
+  };
+  const drawDrag = () => {
+    const group = scroll.querySelector(".drag-select");
+    if (!group) return;
+    const { start, end } = dragRange();
+    const days = state.model.days;
+    const x0 = PAD.left + start * state.pxPerDay, x1 = PAD.left + end * state.pxPerDay;
+    const band = group.querySelector(".drag-band"), label = group.querySelector(".drag-label");
+    band.setAttribute("x", x0);
+    band.setAttribute("width", x1 - x0);
+    label.setAttribute("x", (x0 + x1) / 2);
+    label.textContent = `${shortDate(days[start].date)} – ${shortDate(days[Math.min(days.length, end) - 1].date)} · ${end - start} days`;
+    group.removeAttribute("display");
+  };
+  const endDrag = (event, apply) => {
+    if (!drag || (event && event.pointerId !== drag.id)) return;
+    const { active } = drag;
+    const range = dragRange();
+    if (scroll.hasPointerCapture(drag.id)) scroll.releasePointerCapture(drag.id);
+    drag = null;
+    scroll.classList.remove("is-dragging");
+    scroll.querySelector(".drag-select")?.setAttribute("display", "none");
+    if (active && apply && range.end - range.start >= 3) zoomToRange(state, range.start, range.end);
+  };
+  scroll.addEventListener("pointerdown", event => {
+    if (event.pointerType !== "mouse" || event.button !== 0 || !event.target.closest?.(".chart-hitarea")) return;
+    event.preventDefault();
+    const day = dayAt(event.clientX);
+    drag = { id: event.pointerId, startX: event.clientX, from: day, to: day, active: false };
+  });
+  scroll.addEventListener("pointerup", event => endDrag(event, true));
+  scroll.addEventListener("pointercancel", event => endDrag(event, false));
+  document.addEventListener("keydown", event => { if (event.key === "Escape") endDrag(null, false); });
+  scroll.addEventListener("dblclick", event => { if (!state.fit && event.target.closest?.(".chart-hitarea")) zoomTo(state, 0); });
+
   const onPointer = event => {
+    if (drag && !(event.buttons & 1)) endDrag(null, false);
+    if (drag) {
+      drag.to = dayAt(event.clientX);
+      if (!drag.active && Math.abs(event.clientX - drag.startX) > 5) {
+        drag.active = true;
+        scroll.setPointerCapture(drag.id);
+        scroll.classList.add("is-dragging");
+        tooltip.hide();
+        const line = crosshair();
+        if (line) line.style.display = "none";
+      }
+      if (drag.active) { drawDrag(); return; }
+    }
     const flag = event.target.closest?.(".release-flag");
     const hit = event.target.closest?.(".chart-hitarea");
     const line = crosshair();
@@ -505,6 +571,7 @@ function bindChart(state, tooltip) {
   };
   scroll.addEventListener("pointermove", onPointer);
   scroll.addEventListener("pointerleave", () => {
+    if (drag?.active) return;
     tooltip.hide();
     const line = crosshair();
     if (line) line.style.display = "none";
@@ -604,11 +671,11 @@ function repoCard(model) {
         <div class="legend"><span><i class="swatch area-swatch" style="background:${chartColors.outstanding}"></i>Open issues</span><span><i class="swatch" style="background:${chartColors.opened}"></i>Opened / day ↑</span><span><i class="swatch" style="background:${chartColors.closed}"></i>Closed / day ↓</span><span><i class="swatch line-swatch" style="background:${model.color}"></i>Release</span><span><i class="swatch window-swatch"></i>14 days after, tinted by verdict</span></div>
         <div class="zoom-controls" role="group" aria-label="Zoom"><button class="zoom-out" type="button" aria-label="Zoom out">−</button><span class="zoom-readout">Whole history</span><button class="zoom-in" type="button" aria-label="Zoom in">+</button><button class="zoom-fit" type="button">Fit</button></div>
       </div>
-      <div class="chart-frame"><div class="chart-scroll" tabindex="0" aria-label="${esc(model.name)} timeline. Ctrl or ⌘ + scroll to zoom, Shift + scroll to pan."></div><div class="chart-axis chart-axis-left" aria-hidden="true"></div><div class="chart-axis chart-axis-right" aria-hidden="true"></div></div>
-      <p class="chart-hint">Hover a flag for the release’s numbers · hover the chart for a single day · <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + scroll to zoom</p>
+      <div class="chart-frame"><div class="chart-scroll" tabindex="0" aria-label="${esc(model.name)} timeline. Drag across the chart or Ctrl/⌘ + scroll to zoom, Shift + scroll to pan."></div><div class="chart-axis chart-axis-left" aria-hidden="true"></div><div class="chart-axis chart-axis-right" aria-hidden="true"></div></div>
+      <p class="chart-hint">Hover a flag for the release’s numbers · hover the chart for a single day · drag across it to zoom in, double-click to zoom back out · <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + scroll also zooms</p>
       <div class="moments-head"><h3>Release moments <small>change in open issues over the next 14 days</small></h3><div class="moment-filters" role="group" aria-label="Filter release moments">${filters}</div></div>
       <div class="moment-strip">${model.all.map(moment => momentCard(model, moment)).join("")}</div>
-      <div class="summary-strip"><div><span>Issues opened</span><strong>${number(model.totals.opened)}</strong></div><div><span>Issues closed</span><strong>${number(model.totals.closed)}</strong></div><div><span>Backlog peak</span><strong>${number(model.peak.unclosed)} <small>${esc(shortDate(model.peak.date))}</small></strong></div><div><span>Busiest day · opened / closed</span><strong><b class="is-bad">${number(busiest.opened)}</b> <small>${esc(shortDate(busiest.date))}</small> · <b class="is-good">${number(biggestClose.closed)}</b> <small>${esc(shortDate(biggestClose.date))}</small></strong></div></div>
+      <div class="summary-strip"><div><span>Issues opened</span><strong>${number(model.totals.opened)}</strong></div><div><span>Issues closed</span><strong>${number(model.totals.closed)}</strong></div><div><span>Backlog peak</span><strong>${number(model.peak.unclosed)} <small>${esc(shortDate(model.peak.date))}</small></strong></div><div><span>Busiest day · opened / closed</span><strong><b class="is-opened">${number(busiest.opened)}</b> <small>${esc(shortDate(busiest.date))}</small> · <b class="is-closed">${number(biggestClose.closed)}</b> <small>${esc(shortDate(biggestClose.date))}</small></strong></div></div>
     </section>
   </article>`;
 }

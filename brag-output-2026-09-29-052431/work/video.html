@@ -12,7 +12,7 @@
 const W = 1920, H = 1080;
 const C = {
   ink: '#17202a', muted: '#687482', paper: '#f5f1e9', card: '#fffdf9', line: '#ddd7cc',
-  codex: '#157a6e', claude: '#bf6c43', purple: '#7951a8', event: '#c24369', axis: '#89918e',
+  codex: '#157a6e', claude: '#bf6c43', purple: '#d73a4a', opened: '#bc4c00', closed: '#8250df', event: '#c24369', axis: '#89918e',
   boom: '#c24369', bust: '#1f8f4d', shrug: '#687482', nolink: '#5a4a8a'
 };
 const KIND = {
@@ -28,6 +28,24 @@ const ctx = document.getElementById('c').getContext('2d');
 const { REPOS, scenes } = TL;
 REPOS.codex.color = C.codex; REPOS.claude.color = C.claude;
 REPOS.codex.label = 'OPENAI / CODEX'; REPOS.claude.label = 'ANTHROPICS / CLAUDE-CODE';
+
+// GitHub octicons (16×16): issue-opened / issue-closed
+const ICON_OPEN = new Path2D('M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z');
+const ICON_CLOSED = new Path2D('M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z');
+function icon(path, x, y, size, color, alpha = 1) {
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.translate(x, y); ctx.scale(size / 16, size / 16);
+  ctx.fillStyle = color; ctx.fill(path, 'evenodd'); ctx.restore();
+}
+// lab logos (Simple Icons, 24×24), tinted to each repo's colour
+const LOGOS = {};
+const logosReady = Promise.all([['codex', 'logos/openai.svg'], ['claude', 'logos/claude.svg']].map(([k, src]) => fetch(src).then(r => r.text()).then(svg => {
+  LOGOS[k] = new Path2D([...svg.matchAll(/ d="([^"]+)"/g)].map(m => m[1]).join(' '));
+})));
+function logo(k, x, y, size, color, alpha = 1) {
+  if (!LOGOS[k]) return;
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.translate(x, y); ctx.scale(size / 24, size / 24);
+  ctx.fillStyle = color; ctx.fill(LOGOS[k]); ctx.restore();
+}
 
 // ---------- helpers ----------
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
@@ -79,7 +97,7 @@ function drawHook(t, sc) {
   for (let k = 0; k < nShow; k++) {
     const d = DOTS[k], age = clamp((t - .1 - (k / DOTS.length) * 1.3) * 5);
     ctx.globalAlpha = 1 - fall;
-    ctx.fillStyle = k % 9 === 0 ? 'rgba(194,67,105,.55)' : k % 5 === 0 ? 'rgba(191,108,67,.4)' : 'rgba(121,81,168,.28)';
+    ctx.fillStyle = k % 9 === 0 ? 'rgba(194,67,105,.55)' : k % 5 === 0 ? 'rgba(191,108,67,.4)' : 'rgba(215,58,74,.28)';
     ctx.beginPath(); ctx.arc(d.x, d.y + fall * fall * (600 + d.v * 900), 5.2 * Math.min(1, age), 0, 7); ctx.fill();
   }
   ctx.globalAlpha = 1;
@@ -151,7 +169,7 @@ function drawChapter(t, sc) {
   caps(`CHAPTER ${n} · ${r.slug.toUpperCase()}`, W / 2, 300 + edy, 26, r.color, 'center', ea * oa, .22);
   const [a, d] = reveal(t, s + .3, .5, 50);
   text(r.name, W / 2, 450 + d, `700 140px ${SERIF}`, C.ink, 'center', a * oa, -5);
-  const stats = [['ISSUES FILED', r.opened, C.ink], ['CLOSED', r.closed, C.bust], ['STILL OPEN', r.open, C.purple]];
+  const stats = [['ISSUES FILED', r.opened, C.ink], ['CLOSED', r.closed, C.closed], ['STILL OPEN', r.open, C.purple]];
   stats.forEach(([lbl, v, col], i) => {
     const x = W / 2 + (i - 1) * 440, [sa, sdy] = reveal(t, s + .7 + i * .18, .45, 30);
     text(fmt(v * easeOut(prog(t, s + .7 + i * .18, s + 1.6 + i * .18))), x, 640 + sdy, `700 104px ${SERIF}`, col, 'center', sa * oa, -3);
@@ -202,7 +220,8 @@ function drawChart(t, sc) {
   ctx.save(); ctx.globalAlpha = oa; ctx.translate(sx, sy);
 
   const [ha, hdy] = reveal(t, s0, .45, 30);
-  caps(r.label, CH.x0, 130 + hdy, 22, r.color, 'left', ha);
+  logo(sc.repo, CH.x0, 104 + hdy, 32, r.color, ha);
+  caps(r.label, CH.x0 + 44, 130 + hdy, 22, r.color, 'left', ha);
   text('Open issues vs. model releases', CH.x0, 196 + hdy, `700 56px ${SERIF}`, C.ink, 'left', ha, -1);
   // tally pills
   const tally = { boom: 0, bust: 0, shrug: 0, nolink: 0 };
@@ -258,22 +277,30 @@ function drawChart(t, sc) {
     const fmax = Math.max(5, vis[Math.floor((vis.length - 1) * .98)] || 5), bw = Math.max(1.2, (CH.x1 - CH.x0) / n * .7);
     ctx.save(); ctx.globalAlpha *= ga;
     ctx.fillStyle = '#c9c1b3'; ctx.fillRect(CH.x0, FLOW.mid - .5, CH.x1 - CH.x0, 1);
-    caps('OPENED / DAY', CH.x0 - 14, FLOW.mid - 22, 12, C.boom, 'right', 1, .1);
-    caps('CLOSED / DAY', CH.x0 - 14, FLOW.mid + 32, 12, C.bust, 'right', 1, .1);
+    for (const [lbl, y, col, path] of [['OPENED / DAY', FLOW.mid - 22, C.opened, ICON_OPEN], ['CLOSED / DAY', FLOW.mid + 32, C.closed, ICON_CLOSED]]) {
+      caps(lbl, CH.x0 - 14, y, 12, col, 'right', 1, .1);
+      ctx.save(); ctx.font = `800 12px ${SANS}`; ctx.letterSpacing = '1.2px'; const w = ctx.measureText(lbl).width; ctx.restore();
+      icon(path, CH.x0 - 14 - w - 22, y - 13, 16, col);
+    }
     for (let i = 0; i <= Math.min(n - 1, ci); i++) {
       const o = Math.min(1, days[i].opened / fmax) * FLOW.h, c = Math.min(1, days[i].closed / fmax) * FLOW.h;
-      ctx.fillStyle = 'rgba(194,67,105,.55)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid - o, bw, o);
-      ctx.fillStyle = 'rgba(31,143,77,.7)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid, bw, c);
+      ctx.fillStyle = 'rgba(188,76,0,.55)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid - o, bw, o);
+      ctx.fillStyle = 'rgba(130,80,223,.65)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid, bw, c);
     }
     ctx.restore();
   }
   // week-before window on the flow strip for the current release
+  // (its label is drawn last, further down, so release lines never cross it)
+  let drawWeekBadge = () => {};
   if (stop && stop.kind !== 'nolink' && stop.i0 >= 7) {
     const p = easeOut(prog(t, stop.tArrive - .1, stop.tArrive + .4));
     const a0 = X(stop.i0 - 7), a1 = X(stop.i0);
     ctx.save(); ctx.globalAlpha *= ga * p;
     ctx.fillStyle = 'rgba(31,143,77,.16)'; ctx.fillRect(a0, FLOW.mid - FLOW.h - 4, a1 - a0, FLOW.h * 2 + 8);
     ctx.strokeStyle = C.bust; ctx.lineWidth = 2; ctx.strokeRect(a0, FLOW.mid - FLOW.h - 4, a1 - a0, FLOW.h * 2 + 8);
+    ctx.restore();
+    drawWeekBadge = () => {
+    ctx.save(); ctx.globalAlpha *= ga * p;
     const spike = stop.preX >= 1.5;
     const lbl = stop.preX == null ? 'WEEK BEFORE' : `WEEK BEFORE: CLOSING ${stop.preX.toFixed(1)}× NORMAL`;
     ctx.font = `800 14px ${SANS}`; ctx.letterSpacing = '1.5px'; const lw = ctx.measureText(lbl).width + 20;
@@ -281,6 +308,7 @@ function drawChart(t, sc) {
     rrect(lx, ly, lw, 26, 13); ctx.fillStyle = spike ? C.bust : C.card; ctx.fill(); ctx.strokeStyle = C.bust; ctx.lineWidth = 1.5; ctx.stroke();
     ctx.fillStyle = spike ? '#fff' : C.bust; ctx.fillText(lbl, lx + 10, ly + 18);
     ctx.restore();
+    };
   }
   // release beams: every release date is a solid lab-colored line through both charts
   for (const date of r.releaseDates) {
@@ -333,7 +361,7 @@ function drawChart(t, sc) {
   }
   // backlog area + line
   const grad = ctx.createLinearGradient(0, CH.top, 0, CH.base);
-  grad.addColorStop(0, 'rgba(121,81,168,.40)'); grad.addColorStop(1, 'rgba(121,81,168,.05)');
+  grad.addColorStop(0, 'rgba(215,58,74,.40)'); grad.addColorStop(1, 'rgba(215,58,74,.05)');
   ctx.save(); ctx.globalAlpha *= ga;
   ctx.beginPath(); ctx.moveTo(X(0), CH.base);
   for (let i = 0; i <= ci; i++) ctx.lineTo(X(i), Y(days[i].unclosed));
@@ -366,15 +394,17 @@ function drawChart(t, sc) {
   const cx = X(cur), cy = Y(curVal);
   ctx.strokeStyle = 'rgba(23,32,42,.22)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx, CH.top - 10); ctx.lineTo(cx, FLOW.mid + FLOW.h); ctx.stroke();
   const pulse = 1 + .25 * Math.sin(t * 12);
-  ctx.fillStyle = 'rgba(121,81,168,.2)'; ctx.beginPath(); ctx.arc(cx, cy, 20 * pulse, 0, 7); ctx.fill();
+  ctx.fillStyle = 'rgba(215,58,74,.2)'; ctx.beginPath(); ctx.arc(cx, cy, 20 * pulse, 0, 7); ctx.fill();
   ctx.fillStyle = C.purple; ctx.beginPath(); ctx.arc(cx, cy, 9, 0, 7); ctx.fill();
   const lbl = `${fmt(curVal)} open`, sub = dt(days[ci].date);
-  ctx.font = `800 24px ${SANS}`; const lw = Math.max(ctx.measureText(lbl).width, 150) + 32;
+  ctx.font = `800 24px ${SANS}`; const lw = Math.max(ctx.measureText(lbl).width + 32, 150) + 32;
   const lx = cx - lw - 28 >= CH.x0 ? cx - lw - 28 : cx + 28, ly = clamp(cy - 33, CH.top - 6, CH.base - 70);
   rrect(lx, ly, lw, 66, 14); ctx.fillStyle = C.ink; ctx.fill();
-  text(lbl, lx + 16, ly + 30, `800 24px ${SANS}`, '#fffdf9');
+  icon(ICON_OPEN, lx + 16, ly + 11, 22, C.opened);
+  text(lbl, lx + 48, ly + 30, `800 24px ${SANS}`, '#fffdf9');
   text(sub, lx + 16, ly + 54, `500 17px ${SANS}`, '#c9c1b3');
   ctx.restore();
+  drawWeekBadge();
 
   drawPanel(t, sc, stop, r);
   ctx.restore();
@@ -437,7 +467,7 @@ function drawPanel(t, sc, s, r) {
   const xc = v => v == null ? C.muted : v >= 1.5 ? C.bust : v <= .67 ? C.boom : C.muted;
   const stats = [
     ['BACKLOG AT START', [[fmt(s.at), C.ink, 34]]],
-    [`OPENED · CLOSED, ${s.days}D`, [[fmt(s.opened), C.boom, 30], [' · ', C.muted, 30], [fmt(s.closed), C.bust, 30]]],
+    [`OPENED · CLOSED, ${s.days}D`, [[ICON_OPEN, C.opened, 20], [fmt(s.opened), C.opened, 30], [14, null, 0], [ICON_CLOSED, C.closed, 20], [fmt(s.closed), C.closed, 30]]],
     ['CLOSED/DAY, WEEK BEFORE', [[rateS(s.preRate), C.ink, 34], [xs(s.preX), xc(s.preX), 17]]],
     ['CLOSED/DAY, 2 WEEKS AFTER', [[rateS(s.postRate), C.ink, 34], [xs(s.postX), xc(s.postX), 17]]]
   ];
@@ -447,6 +477,8 @@ function drawPanel(t, sc, s, r) {
     caps(lbl, gx, gy + 10, 13, C.muted, 'left', sa, .1);
     let px = gx;
     for (const [str, c, size] of parts) {
+      if (typeof str === 'number') { px += str; continue; }                                   // spacer
+      if (str instanceof Path2D) { icon(str, px, gy + 48 - size + 1, size, c, sa); px += size + 7; continue; }
       const f = size >= 30 ? `700 ${size}px ${SERIF}` : `800 ${size}px ${SANS}`;
       text(str, px, gy + 48, f, c, 'left', sa); ctx.font = f; px += ctx.measureText(str).width;
     }
@@ -471,7 +503,7 @@ function drawThroughput(t, sc) {
     ctx.save(); ctx.globalAlpha = a * oa; ctx.translate(0, d);
     rrect(150, y, 1620, 280, 26); ctx.fillStyle = C.card; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
     caps(r.slug.toUpperCase(), 200, y + 56, 22, r.color);
-    const bars = [['opened', r.last30.opened, C.boom], ['closed', r.last30.closed, C.bust]];
+    const bars = [['opened', r.last30.opened, C.opened], ['closed', r.last30.closed, C.closed]];
     bars.forEach(([lbl, v, col], j) => {
       const by = y + 100 + j * 76, p = easeOut(prog(t, t0 + .3 + j * .15, t0 + 1.3 + j * .15));
       text(lbl, 200, by + 30, `600 26px ${SANS}`, C.muted);
@@ -663,7 +695,8 @@ function drawWipe(t, t0, color, label) {
 function drawProgress(t) {
   const a = prog(t, 4.5, 5.2) * (1 - prog(t, TL.total - 5.5, TL.total - 5));
   if (a <= 0) return;
-  const x0 = 150, x1 = 1770, y = 1030, X = v => lerp(x0, x1, v / TL.total);
+  // spans the frame like the player's own scrubber, so chapters line up with it
+  const x0 = 22, x1 = W - 22, y = 1030, X = v => lerp(x0, x1, v / TL.total);
   ctx.save(); ctx.globalAlpha = a;
   rrect(x0, y, x1 - x0, 5, 3); ctx.fillStyle = 'rgba(137,145,142,.25)'; ctx.fill();
   rrect(x0, y, X(t) - x0, 5, 3); ctx.fillStyle = C.event; ctx.fill();
@@ -691,7 +724,7 @@ window.renderFrame = function (t) {
     if (sc.type === 'prerelease') drawWipe(t, sc.start, C.bust, 'CLEANUP BEFORE LAUNCH?');
   }
 };
-window.ready = document.fonts.ready.then(() => true);
+window.ready = Promise.all([document.fonts.ready, logosReady]).then(() => true);
 window.TOTAL = TL.total;
 </script>
 </body>

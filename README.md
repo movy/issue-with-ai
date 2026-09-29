@@ -6,6 +6,10 @@ OpenAI and Anthropic ship new models every few weeks. Both labs also run public 
 
 **Live site: <https://movy.github.io/issue-with-ai/>**
 
+[![Watch the 2-minute data film](media/issue-with-ai-poster.jpg)](https://movy.github.io/issue-with-ai/#film)
+
+<sub>▶ Click the poster to watch the film on the site ([MP4](media/issue-with-ai.mp4)).</sub>
+
 The result is a static site with a 2:20 data film, a short list of findings and an interactive chart for each repo. Everything comes from one committed snapshot of the GitHub data. The page never calls GitHub at runtime.
 
 ## What we found
@@ -86,8 +90,8 @@ To refresh the film after a new collection, run `node build-data.mjs`, `node aud
 
 ## Using the charts
 
-- Each chart opens fitted to the full history. Use the zoom buttons, or Ctrl/⌘ + scroll, for daily detail. The open-issues axis rescales to whatever is on screen.
-- Numbered flags are release moments. Each flag shows the 14-day change, and its window is tinted by verdict. Hover a flag for the full numbers, including closing before and after the release.
-- The strip under each chart shows issues opened per day (pink, up) and closed per day (green, down).
+- Each chart opens fitted to the full history. Drag across a stretch of the chart to zoom to it, and double-click to zoom back out. The zoom buttons and Ctrl/⌘ + scroll work too. The open-issues axis rescales to whatever is on screen.
+- Numbered flags are release moments, labelled with the model that shipped. The flag's border and its 14-day window are coloured by verdict. Hover a flag for the full numbers, including closing before and after the release.
+- The strip under each chart shows issues opened per day (orange, up) and closed per day (purple, down).
 - The release cards below each chart can be filtered by verdict. Clicking a card zooms to that release.
 - The charts describe activity. They don't measure product quality, reliability or community sentiment.
