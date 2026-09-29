@@ -2,3 +2,23 @@
 .env
 node_modules/
 dist/
+brag-output*/work/stills/
+brag-output*/work/*.mp4
+brag-output*/work/*.wav
+brag-output*/work/render.log
+brag-output*/work/wave.png
+brag-output*/stills/
+brag-output*/*.mp4
+brag-output*/*.webm
+
+# brag film renders: the published film lives in media/.
+# The superseded 25-second cut is kept locally only.
+brag-output/
+brag-output-*/*.mp4
+brag-output-*/*.webm
+brag-output-*/stills/
+brag-output-*/work/stills/
+brag-output-*/work/*.mp4
+brag-output-*/work/*.wav
+brag-output-*/work/*.png
+brag-output-*/work/render.log

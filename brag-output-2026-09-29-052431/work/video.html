@@ -1,0 +1,698 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>html,body{margin:0;background:#f5f1e9}canvas{display:block}</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script src="data.js"></script>
+<script src="timeline.js"></script>
+<script>
+const W = 1920, H = 1080;
+const C = {
+  ink: '#17202a', muted: '#687482', paper: '#f5f1e9', card: '#fffdf9', line: '#ddd7cc',
+  codex: '#157a6e', claude: '#bf6c43', purple: '#7951a8', event: '#c24369', axis: '#89918e',
+  boom: '#c24369', bust: '#1f8f4d', shrug: '#687482', nolink: '#5a4a8a'
+};
+const KIND = {
+  boom: { col: C.boom, arrow: '↑', word: 'BOOM', rule: 'backlog grew ≥ 10%', short: '≥ 10% growth' },
+  bust: { col: C.bust, arrow: '↓', word: 'BUST', rule: 'backlog shrank ≥ 5%', short: '≥ 5% drop' },
+  shrug: { col: C.shrug, arrow: '~', word: 'SHRUG', rule: 'moved less than that', short: 'less than either' },
+  nolink: { col: C.nolink, arrow: '?', word: 'NO RELEASE', rule: 'big swing, no launch within 14 days', short: 'no launch nearby' }
+};
+const SERIF = 'Georgia, "Times New Roman", serif';
+const SANS = '-apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif';
+const ctx = document.getElementById('c').getContext('2d');
+{ const arc = CanvasRenderingContext2D.prototype.arc; CanvasRenderingContext2D.prototype.arc = function (x, y, r, ...rest) { return arc.call(this, x, y, Math.max(0, r), ...rest); }; }
+const { REPOS, scenes } = TL;
+REPOS.codex.color = C.codex; REPOS.claude.color = C.claude;
+REPOS.codex.label = 'OPENAI / CODEX'; REPOS.claude.label = 'ANTHROPICS / CLAUDE-CODE';
+
+// ---------- helpers ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = x => 1 - Math.pow(1 - x, 3);
+const easeIn = x => x * x * x;
+const easeInOut = x => x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const backOut = x => { const c1 = 1.7, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const fmt = n => Math.round(n).toLocaleString('en-US');
+const signed = n => (Math.round(n) > 0 ? '+' : Math.round(n) < 0 ? '−' : '±') + fmt(Math.abs(n));
+const pctS = p => (p > 0 ? '+' : p < 0 ? '−' : '') + Math.abs(p * 100).toFixed(Math.abs(p) < .1 ? 1 : 0) + '%';
+const dt = (s, o = { month: 'short', day: 'numeric', year: 'numeric' }) => new Date(s + 'T00:00:00Z').toLocaleDateString('en-US', { ...o, timeZone: 'UTC' });
+function dateRange(a, b) {
+  if (a === b) return dt(a);
+  const [ya, ma] = a.split('-'), [yb, mb] = b.split('-');
+  if (ya === yb && ma === mb) return `${dt(a, { month: 'short', day: 'numeric' })} – ${+b.slice(8)}, ${ya}`;
+  return `${dt(a, { month: 'short', day: 'numeric' })} – ${dt(b)}`;
+}
+function rng(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
+function text(str, x, y, font, color, align = 'left', alpha = 1, ls = 0) {
+  if (alpha <= 0) return;
+  ctx.save(); ctx.globalAlpha *= alpha; ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align;
+  if (ls) ctx.letterSpacing = ls + 'px'; ctx.fillText(str, x, y); ctx.restore();
+}
+const caps = (str, x, y, size, color, align = 'left', alpha = 1, sp = .16, w = 800) => text(str, x, y, `${w} ${size}px ${SANS}`, color, align, alpha, size * sp);
+function wrap(str, maxW, font) {
+  ctx.save(); ctx.font = font; const words = str.split(' '), lines = []; let cur = '';
+  for (const w of words) { const test = cur ? cur + ' ' + w : w; if (ctx.measureText(test).width > maxW && cur) { lines.push(cur); cur = w; } else cur = test; }
+  if (cur) lines.push(cur); ctx.restore(); return lines;
+}
+function para(str, x, y, maxW, font, color, lh, alpha = 1, align = 'left') {
+  wrap(str, maxW, font).forEach((l, i) => text(l, x, y + i * lh, font, color, align, alpha));
+}
+function reveal(t, t0, dur = .45, dist = 36) { const p = easeOut(prog(t, t0, t0 + dur)); return [p, (1 - p) * dist]; }
+// fade out during the last `d` seconds of a scene
+const outA = (t, sc, d = .35) => 1 - easeIn(prog(t, sc.end - d, sc.end));
+
+// ---------- hook ----------
+const DOTS = (() => {
+  const R = rng(42), out = [];
+  for (let y = 0; y < 54; y++) for (let x = 0; x < 96; x++) out.push({ x: 10 + x * 20, y: 10 + y * 20, r: R(), v: R() });
+  return out.sort((a, b) => a.r - b.r);
+})();
+function drawHook(t, sc) {
+  const oa = outA(t, sc, .4);
+  const p = easeOut(prog(t, .1, 1.4)), nShow = Math.floor(DOTS.length * p), fall = prog(t, sc.end - .45, sc.end);
+  for (let k = 0; k < nShow; k++) {
+    const d = DOTS[k], age = clamp((t - .1 - (k / DOTS.length) * 1.3) * 5);
+    ctx.globalAlpha = 1 - fall;
+    ctx.fillStyle = k % 9 === 0 ? 'rgba(194,67,105,.55)' : k % 5 === 0 ? 'rgba(191,108,67,.4)' : 'rgba(121,81,168,.28)';
+    ctx.beginPath(); ctx.arc(d.x, d.y + fall * fall * (600 + d.v * 900), 5.2 * Math.min(1, age), 0, 7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const g = ctx.createRadialGradient(W / 2, H / 2, 50, W / 2, H / 2, 860);
+  g.addColorStop(0, 'rgba(245,241,233,.97)'); g.addColorStop(.55, 'rgba(245,241,233,.88)'); g.addColorStop(1, 'rgba(245,241,233,0)');
+  ctx.save(); ctx.globalAlpha = oa; ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); ctx.restore();
+
+  const [ea, edy] = reveal(t, .15, .4, 20);
+  caps('● LIVE GITHUB SNAPSHOT · ' + dt(DATA.generatedAt.slice(0, 10)).toUpperCase(), W / 2, 250 + edy, 24, C.event, 'center', ea * oa, .2);
+  const val = REPOS.codex.open * easeOut(prog(t, .1, 1.4));
+  const hit = t >= 1.4 ? 1 + .07 * Math.exp(-(t - 1.4) * 8) * Math.cos((t - 1.4) * 30) : lerp(.9, 1, prog(t, .1, 1.4));
+  ctx.save(); ctx.globalAlpha = oa; ctx.translate(W / 2, 520); ctx.scale(hit, hit);
+  ctx.font = `700 280px ${SERIF}`; ctx.fillStyle = C.ink; ctx.textAlign = 'center'; ctx.letterSpacing = '-12px';
+  ctx.fillText(fmt(val), 0, 0); ctx.restore();
+  const [la, ldy] = reveal(t, 1.35, .4, 30);
+  ctx.save(); ctx.globalAlpha = la * oa;
+  ctx.font = `500 50px ${SANS}`; const w1 = ctx.measureText('open issues on ').width;
+  ctx.font = `800 50px ${SANS}`; const w2 = ctx.measureText('openai/codex').width;
+  const hx = W / 2 - (w1 + w2) / 2;
+  ctx.font = `500 50px ${SANS}`; ctx.fillStyle = C.ink; ctx.fillText('open issues on ', hx, 625 + ldy);
+  ctx.font = `800 50px ${SANS}`; ctx.fillStyle = C.codex; ctx.fillText('openai/codex', hx + w1, 625 + ldy); ctx.restore();
+  const [ca, cdy] = reveal(t, 2.3, .45, 30);
+  const cv = REPOS.claude.open * easeOut(prog(t, 2.3, 3.1));
+  ctx.save(); ctx.globalAlpha = ca * oa; ctx.textAlign = 'center';
+  ctx.font = `700 64px ${SERIF}`; ctx.fillStyle = C.muted; ctx.fillText(`+ ${fmt(cv)}`, W / 2 - 250, 755 + cdy);
+  ctx.font = `500 40px ${SANS}`; ctx.fillStyle = C.muted; ctx.textAlign = 'left'; ctx.fillText('on', W / 2 - 110, 752 + cdy);
+  ctx.font = `800 40px ${SANS}`; ctx.fillStyle = C.claude; ctx.fillText('anthropics/claude-code', W / 2 - 50, 752 + cdy);
+  ctx.restore();
+}
+
+// ---------- intro ----------
+function drawIntro(t, sc) {
+  const s = sc.start, oa = outA(t, sc);
+  // beat A
+  const aOut = 1 - easeIn(prog(t, s + 3.2, s + 3.5));
+  if (aOut > 0) {
+    const [ea, edy] = reveal(t, s + .05, .4, 20);
+    caps('ISSUE WITH AI', W / 2, 330 + edy, 26, C.muted, 'center', ea * aOut, .24);
+    const [a1, d1] = reveal(t, s + .15, .5, 50);
+    text(`${TL.releaseCount} model & product releases.`, W / 2, 510 + d1, `700 118px ${SERIF}`, C.ink, 'center', a1 * aOut, -3);
+    const [a2, d2] = reveal(t, s + .8, .5, 50);
+    text('Did any of them move the backlog?', W / 2, 660 + d2, `italic 400 84px ${SERIF}`, C.muted, 'center', a2 * aOut);
+  }
+  // beat B
+  const b0 = s + 3.5;
+  if (t >= b0) {
+    const [ea, edy] = reveal(t, b0, .4, 20);
+    caps('HOW TO READ THIS', 150, 230 + edy, 24, C.event, 'left', ea * oa, .2);
+    const [a1, d1] = reveal(t, b0 + .1, .5, 40);
+    text('For each release, we measure the change', 150, 330 + d1, `700 76px ${SERIF}`, C.ink, 'left', a1 * oa, -1.5);
+    text('in open issues over the next 14 days.', 150, 420 + d1, `700 76px ${SERIF}`, C.ink, 'left', a1 * oa, -1.5);
+    ['boom', 'bust', 'shrug', 'nolink'].forEach((k, i) => {
+      const K = KIND[k], x = 150 + (i % 2) * 820, y = 540 + Math.floor(i / 2) * 170;
+      const [pa, pdy] = reveal(t, b0 + .7 + i * .25, .45, 30);
+      ctx.save(); ctx.globalAlpha = pa * oa; ctx.translate(0, pdy);
+      rrect(x, y, 780, 140, 22); ctx.fillStyle = C.card; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
+      text(`${K.arrow} ${K.word}`, x + 40, y + 70, `700 50px ${SERIF}`, K.col);
+      text(K.rule, x + 42, y + 112, `500 26px ${SANS}`, C.muted);
+      ctx.restore();
+    });
+  }
+}
+
+// ---------- chapter cards ----------
+function drawChapter(t, sc) {
+  const r = REPOS[sc.repo], s = sc.start, oa = outA(t, sc, .3);
+  const n = sc.repo === 'codex' ? 1 : 2;
+  const [ea, edy] = reveal(t, s + .2, .4, 20);
+  caps(`CHAPTER ${n} · ${r.slug.toUpperCase()}`, W / 2, 300 + edy, 26, r.color, 'center', ea * oa, .22);
+  const [a, d] = reveal(t, s + .3, .5, 50);
+  text(r.name, W / 2, 450 + d, `700 140px ${SERIF}`, C.ink, 'center', a * oa, -5);
+  const stats = [['ISSUES FILED', r.opened, C.ink], ['CLOSED', r.closed, C.bust], ['STILL OPEN', r.open, C.purple]];
+  stats.forEach(([lbl, v, col], i) => {
+    const x = W / 2 + (i - 1) * 440, [sa, sdy] = reveal(t, s + .7 + i * .18, .45, 30);
+    text(fmt(v * easeOut(prog(t, s + .7 + i * .18, s + 1.6 + i * .18))), x, 640 + sdy, `700 104px ${SERIF}`, col, 'center', sa * oa, -3);
+    caps(lbl, x, 692 + sdy, 22, C.muted, 'center', sa * oa);
+  });
+  const [fa] = reveal(t, s + 1.2, .5, 0);
+  const extra = sc.repo === 'claude' ? ` · backlog peaked at ${fmt(r.peak.unclosed)} on ${dt(r.peak.date)}` : '';
+  text(`Since ${dt(r.days[0].date)}${extra}`, W / 2, 790, `italic 400 36px ${SERIF}`, C.muted, 'center', fa * oa);
+}
+
+// ---------- chart chapters ----------
+const CH = { x0: 140, x1: 1210, top: 320, base: 630 };
+const FLOW = { mid: 728, h: 70 };        // daily opened (up) / closed (down) strip
+const FLAG_Y = 292, BANNER_Y = 222;      // release flags + current-release banner
+const rateS = v => v == null ? 'n/a' : (v < 10 ? v.toFixed(1) : fmt(v));
+function cursorAt(sc, t) {
+  const r = REPOS[sc.repo], st = sc.stops, n = r.days.length;
+  let prev = 0;
+  for (const s of st) {
+    if (t < s.tTravel) return prev;
+    if (t < s.tArrive) return lerp(prev, s.i0, easeInOut(prog(t, s.tTravel, s.tArrive)));
+    if (t < s.tLeave) return lerp(s.i0, s.reach, easeOut(prog(t, s.tArrive, s.tLeave - .05)));
+    prev = s.reach;
+  }
+  const last = st.at(-1);
+  return lerp(last.reach, n - 1, easeInOut(prog(t, last.tLeave, sc.tRunEnd)));
+}
+function currentStop(sc, t) { let cur = null; for (const s of sc.stops) if (t >= s.tArrive - .15) cur = s; return cur; }
+
+function drawChart(t, sc) {
+  const r = REPOS[sc.repo], days = r.days, n = days.length, s0 = sc.start;
+  const oa = outA(t, sc, .3);
+  const cur = cursorAt(sc, t), ci = Math.floor(cur);
+  const X = i => lerp(CH.x0, CH.x1, i / (n - 1));
+  let vmax = 0; for (let i = 0; i <= Math.min(n - 1, Math.ceil(cur)); i++) vmax = Math.max(vmax, days[i].unclosed);
+  vmax = Math.max(300, vmax * 1.18);
+  const Y = v => CH.base - (CH.base - CH.top) * v / vmax;
+  const curVal = lerp(days[ci].unclosed, days[Math.min(n - 1, ci + 1)].unclosed, cur - ci);
+  const stop = currentStop(sc, t);
+
+  // shake + flash for big moves
+  let sx = 0, sy = 0, flash = 0, flashCol = C.boom;
+  for (const s of sc.stops) if (s.big && t >= s.tArrive) {
+    const e = t - s.tArrive, amp = 16 * Math.exp(-e * 6);
+    sx += Math.sin(e * 70) * amp; sy += Math.cos(e * 53) * amp * .7;
+    const f = .14 * Math.exp(-e * 7); if (f > flash) { flash = f; flashCol = KIND[s.kind].col; }
+  }
+  ctx.save(); ctx.globalAlpha = oa; ctx.translate(sx, sy);
+
+  const [ha, hdy] = reveal(t, s0, .45, 30);
+  caps(r.label, CH.x0, 130 + hdy, 22, r.color, 'left', ha);
+  text('Open issues vs. model releases', CH.x0, 196 + hdy, `700 56px ${SERIF}`, C.ink, 'left', ha, -1);
+  // tally pills
+  const tally = { boom: 0, bust: 0, shrug: 0, nolink: 0 };
+  for (const s of sc.stops) if (t >= s.tArrive) tally[s.kind]++;
+  let tx = 1800;
+  ['nolink', 'shrug', 'bust', 'boom'].forEach(k => {
+    const K = KIND[k], label = `${K.arrow} ${K.word}  ${tally[k]}`;
+    ctx.save(); ctx.font = `800 20px ${SANS}`; ctx.letterSpacing = '1px'; const w = ctx.measureText(label).width + 36; ctx.restore();
+    tx -= w; const bump = sc.stops.filter(s => s.kind === k && t >= s.tArrive).reduce((m, s) => Math.max(m, Math.exp(-(t - s.tArrive) * 8)), 0);
+    ctx.save(); ctx.globalAlpha *= ha; ctx.translate(tx + w / 2, 128 + hdy); ctx.scale(1 + .18 * bump, 1 + .18 * bump);
+    rrect(-w / 2, -24, w, 48, 24); ctx.fillStyle = tally[k] ? K.col : C.card; ctx.fill(); ctx.strokeStyle = K.col; ctx.lineWidth = 2; ctx.stroke();
+    text(label, 0, 7, `800 20px ${SANS}`, tally[k] ? '#fff' : K.col, 'center', 1, 1);
+    ctx.restore(); tx -= 12;
+  });
+
+  const [ga, gdy] = reveal(t, s0 + .15, .5, 20);
+  ctx.save(); ctx.globalAlpha *= ga; ctx.translate(0, gdy);
+  // grid
+  const step = niceStep(vmax / 4);
+  ctx.font = `500 18px ${SANS}`; ctx.fillStyle = C.axis; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (let v = 0; v <= vmax; v += step) {
+    const y = Y(v); ctx.strokeStyle = v === 0 ? '#c9c1b3' : 'rgba(137,145,142,.18)'; ctx.lineWidth = v === 0 ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(CH.x0, y); ctx.lineTo(CH.x1, y); ctx.stroke();
+    ctx.fillText(v >= 1000 ? (v / 1000) + 'k' : v, CH.x0 - 14, y);
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const FB = FLOW.mid + FLOW.h;
+  days.forEach((d, i) => {
+    if (d.date.endsWith('-01') && ['01', '04', '07', '10'].includes(d.date.slice(5, 7))) {
+      ctx.fillText(dt(d.date, { month: 'short', year: '2-digit' }).replace(' ', " '"), X(i), FB + 26);
+      ctx.fillRect(X(i) - .5, FB + 12, 1, 8);
+    }
+  });
+  ctx.restore();
+
+  // 14-day windows (backlog chart + flow strip)
+  for (const s of sc.stops) {
+    if (t < s.tArrive) continue;
+    const col = KIND[s.kind].col, isCur = s === stop;
+    const shown = isCur ? clamp((cur - s.i0) / Math.max(1, s.i1 - s.i0)) : 1;
+    const wx = X(s.i0), ww = (X(s.i1) - X(s.i0)) * Math.max(shown, .08);
+    ctx.save(); ctx.globalAlpha = (isCur ? .16 : .06) * ga; ctx.fillStyle = col;
+    ctx.fillRect(wx, CH.top - 10, ww, FB - CH.top + 10); ctx.restore();
+    if (s.kind === 'nolink') {
+      ctx.save(); ctx.globalAlpha = .6 * ga; ctx.strokeStyle = col; ctx.setLineDash([6, 6]); ctx.lineWidth = 2;
+      ctx.strokeRect(wx, CH.top - 10, ww, FB - CH.top + 10); ctx.restore();
+    }
+  }
+  // flow strip: opened per day up, closed per day down (scale follows what's visible)
+  {
+    const vis = []; for (let i = 0; i <= Math.min(n - 1, ci); i++) vis.push(Math.max(days[i].opened, days[i].closed));
+    vis.sort((a, b) => a - b);
+    const fmax = Math.max(5, vis[Math.floor((vis.length - 1) * .98)] || 5), bw = Math.max(1.2, (CH.x1 - CH.x0) / n * .7);
+    ctx.save(); ctx.globalAlpha *= ga;
+    ctx.fillStyle = '#c9c1b3'; ctx.fillRect(CH.x0, FLOW.mid - .5, CH.x1 - CH.x0, 1);
+    caps('OPENED / DAY', CH.x0 - 14, FLOW.mid - 22, 12, C.boom, 'right', 1, .1);
+    caps('CLOSED / DAY', CH.x0 - 14, FLOW.mid + 32, 12, C.bust, 'right', 1, .1);
+    for (let i = 0; i <= Math.min(n - 1, ci); i++) {
+      const o = Math.min(1, days[i].opened / fmax) * FLOW.h, c = Math.min(1, days[i].closed / fmax) * FLOW.h;
+      ctx.fillStyle = 'rgba(194,67,105,.55)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid - o, bw, o);
+      ctx.fillStyle = 'rgba(31,143,77,.7)'; ctx.fillRect(X(i) - bw / 2, FLOW.mid, bw, c);
+    }
+    ctx.restore();
+  }
+  // week-before window on the flow strip for the current release
+  if (stop && stop.kind !== 'nolink' && stop.i0 >= 7) {
+    const p = easeOut(prog(t, stop.tArrive - .1, stop.tArrive + .4));
+    const a0 = X(stop.i0 - 7), a1 = X(stop.i0);
+    ctx.save(); ctx.globalAlpha *= ga * p;
+    ctx.fillStyle = 'rgba(31,143,77,.16)'; ctx.fillRect(a0, FLOW.mid - FLOW.h - 4, a1 - a0, FLOW.h * 2 + 8);
+    ctx.strokeStyle = C.bust; ctx.lineWidth = 2; ctx.strokeRect(a0, FLOW.mid - FLOW.h - 4, a1 - a0, FLOW.h * 2 + 8);
+    const spike = stop.preX >= 1.5;
+    const lbl = stop.preX == null ? 'WEEK BEFORE' : `WEEK BEFORE: CLOSING ${stop.preX.toFixed(1)}× NORMAL`;
+    ctx.font = `800 14px ${SANS}`; ctx.letterSpacing = '1.5px'; const lw = ctx.measureText(lbl).width + 20;
+    const lx = Math.max(CH.x0, a0 - lw - 6), ly = FLOW.mid + FLOW.h - 26;
+    rrect(lx, ly, lw, 26, 13); ctx.fillStyle = spike ? C.bust : C.card; ctx.fill(); ctx.strokeStyle = C.bust; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = spike ? '#fff' : C.bust; ctx.fillText(lbl, lx + 10, ly + 18);
+    ctx.restore();
+  }
+  // release beams: every release date is a solid lab-colored line through both charts
+  for (const date of r.releaseDates) {
+    const i = r.idx[date]; if (i === undefined || i > cur + .5) continue;
+    const p = clamp((cur - i) / 4);
+    ctx.save(); ctx.globalAlpha *= ga * .38; ctx.strokeStyle = r.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(X(i), FB); ctx.lineTo(X(i), lerp(FB, FLAG_Y, easeOut(p))); ctx.stroke(); ctx.restore();
+  }
+  // numbered release flags (match "RELEASE n OF N" in the panel); crowded ones drop to a second lane
+  let lastX = -1e9, lane = 0;
+  for (const s of sc.stops) {
+    const fx = X(s.i0);
+    lane = fx - lastX < 30 && lane === 0 ? 1 : 0; lastX = fx;
+    if (t < s.tArrive - .15) continue;
+    const p = backOut(clamp((t - s.tArrive + .15) / .4)), fy = FLAG_Y + lane * 30;
+    ctx.save(); ctx.globalAlpha *= ga; ctx.translate(fx, fy); ctx.scale(Math.max(0, p), Math.max(0, p));
+    ctx.fillStyle = s.kind === 'nolink' ? C.nolink : r.color; ctx.beginPath(); ctx.arc(0, 0, 14, 0, 7); ctx.fill();
+    ctx.strokeStyle = KIND[s.kind].col; ctx.lineWidth = 3; ctx.stroke();
+    text(s.kind === 'nolink' ? '?' : String(s.n), 0, 5.5, `800 ${s.n >= 10 ? 13 : 15}px ${SANS}`, '#fff', 'center');
+    ctx.restore();
+  }
+  // current release: bright beam + banner with the model names
+  if (stop) {
+    const next = sc.stops[sc.stops.indexOf(stop) + 1];
+    const inP = clamp((t - stop.tArrive + .15) / .4), outP = next ? easeIn(prog(t, next.tArrive - .4, next.tArrive - .15)) : 0;
+    const a = ga * (1 - outP), bx = X(stop.i0), col = stop.kind === 'nolink' ? C.nolink : r.color;
+    const glow = .45 + .55 * Math.exp(-(t - stop.tArrive) * 2.5);
+    ctx.save(); ctx.globalAlpha *= a * easeOut(inP);
+    ctx.strokeStyle = col; ctx.globalAlpha *= .18 * glow; ctx.lineWidth = 18;
+    ctx.beginPath(); ctx.moveTo(bx, FLAG_Y); ctx.lineTo(bx, FB); ctx.stroke(); ctx.restore();
+    ctx.save(); ctx.globalAlpha *= a * easeOut(inP) * glow; ctx.strokeStyle = col; ctx.lineWidth = 4;
+    if (stop.kind === 'nolink') ctx.setLineDash([8, 8]);
+    ctx.beginPath(); ctx.moveTo(bx, FLAG_Y + 14); ctx.lineTo(bx, lerp(FLAG_Y, FB, easeOut(inP))); ctx.stroke(); ctx.restore();
+    // banner
+    const tag = stop.kind === 'nolink' ? 'NO RELEASE' : 'NEW RELEASE';
+    let names = stop.kind === 'nolink' ? 'nothing shipped here' : stop.names.join(' · ');
+    ctx.font = `800 26px ${SANS}`;
+    if (ctx.measureText(names).width > 560) names = `${stop.names.slice(0, 2).join(' · ')} +${stop.names.length - 2} more`;
+    const nw = ctx.measureText(names).width; ctx.font = `800 15px ${SANS}`; ctx.letterSpacing = '2px'; const tw = ctx.measureText(tag).width; ctx.letterSpacing = '0px';
+    const w = tw + nw + 64, h = 50, lx = clamp(bx - w / 2, CH.x0 - 20, CH.x1 + 40 - w);
+    const sp = backOut(inP);
+    ctx.save(); ctx.globalAlpha *= a; ctx.translate(bx, FLAG_Y - 14); ctx.scale(Math.max(0, sp), Math.max(0, sp)); ctx.translate(-bx, -(FLAG_Y - 14));
+    ctx.shadowColor = 'rgba(23,32,42,.25)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+    rrect(lx, BANNER_Y, w, h, 25); ctx.fillStyle = col; ctx.fill(); ctx.shadowColor = 'transparent';
+    ctx.beginPath(); ctx.moveTo(bx - 10, BANNER_Y + h - 1); ctx.lineTo(bx + 10, BANNER_Y + h - 1); ctx.lineTo(bx, FLAG_Y - 15); ctx.closePath(); ctx.fill();
+    rrect(lx + 5, BANNER_Y + 5, tw + 26, h - 10, 20); ctx.fillStyle = C.ink; ctx.fill();
+    text(tag, lx + 18, BANNER_Y + 31, `800 15px ${SANS}`, '#fff', 'left', 1, 2);
+    text(names, lx + tw + 44, BANNER_Y + 34, `800 26px ${SANS}`, '#fff');
+    ctx.restore();
+  }
+  // backlog area + line
+  const grad = ctx.createLinearGradient(0, CH.top, 0, CH.base);
+  grad.addColorStop(0, 'rgba(121,81,168,.40)'); grad.addColorStop(1, 'rgba(121,81,168,.05)');
+  ctx.save(); ctx.globalAlpha *= ga;
+  ctx.beginPath(); ctx.moveTo(X(0), CH.base);
+  for (let i = 0; i <= ci; i++) ctx.lineTo(X(i), Y(days[i].unclosed));
+  ctx.lineTo(X(cur), Y(curVal)); ctx.lineTo(X(cur), CH.base); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  ctx.beginPath();
+  for (let i = 0; i <= ci; i++) i ? ctx.lineTo(X(i), Y(days[i].unclosed)) : ctx.moveTo(X(i), Y(days[i].unclosed));
+  ctx.lineTo(X(cur), Y(curVal)); ctx.strokeStyle = C.purple; ctx.lineWidth = 4.5; ctx.lineJoin = 'round'; ctx.stroke();
+  // stop markers
+  for (const s of sc.stops) {
+    if (t < s.tArrive) continue;
+    const e = t - s.tArrive, col = KIND[s.kind].col, px = X(s.i0), py = Y(days[s.i0].unclosed);
+    if (s === stop) for (let k = 0; k < 3; k++) {
+      const q = prog(e, k * .15, k * .15 + .9); if (q <= 0 || q >= 1) continue;
+      ctx.save(); ctx.globalAlpha *= (1 - q); ctx.strokeStyle = col; ctx.lineWidth = s.big ? 6 : 4;
+      ctx.beginPath(); ctx.arc(px, py, 14 + easeOut(q) * (s.big ? 220 : 90), 0, 7); ctx.stroke(); ctx.restore();
+    }
+    if (s.big) {
+      const R = rng(s.i0 * 7 + 3);
+      for (let k = 0; k < 70; k++) {
+        const ang = R() * Math.PI * 2, sp = 220 + R() * 650, life = .6 + R() * .8; if (e > life) continue;
+        const q = e / life, dist = sp * (1 - Math.pow(1 - q, 2)) * .9;
+        ctx.save(); ctx.globalAlpha *= (1 - q); ctx.fillStyle = k % 3 ? col : C.purple;
+        ctx.beginPath(); ctx.arc(px + Math.cos(ang) * dist, py + Math.sin(ang) * dist + 260 * q * q, (3 + R() * 6) * (1 - q * .6), 0, 7); ctx.fill(); ctx.restore();
+      }
+    }
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(px, py, (s === stop ? 11 : 8) * backOut(clamp(e / .35)), 0, 7); ctx.fill();
+    ctx.fillStyle = C.card; ctx.beginPath(); ctx.arc(px, py, (s === stop ? 4.5 : 3) * clamp(e / .35), 0, 7); ctx.fill();
+  }
+  // cursor head + live label
+  const cx = X(cur), cy = Y(curVal);
+  ctx.strokeStyle = 'rgba(23,32,42,.22)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx, CH.top - 10); ctx.lineTo(cx, FLOW.mid + FLOW.h); ctx.stroke();
+  const pulse = 1 + .25 * Math.sin(t * 12);
+  ctx.fillStyle = 'rgba(121,81,168,.2)'; ctx.beginPath(); ctx.arc(cx, cy, 20 * pulse, 0, 7); ctx.fill();
+  ctx.fillStyle = C.purple; ctx.beginPath(); ctx.arc(cx, cy, 9, 0, 7); ctx.fill();
+  const lbl = `${fmt(curVal)} open`, sub = dt(days[ci].date);
+  ctx.font = `800 24px ${SANS}`; const lw = Math.max(ctx.measureText(lbl).width, 150) + 32;
+  const lx = cx - lw - 28 >= CH.x0 ? cx - lw - 28 : cx + 28, ly = clamp(cy - 33, CH.top - 6, CH.base - 70);
+  rrect(lx, ly, lw, 66, 14); ctx.fillStyle = C.ink; ctx.fill();
+  text(lbl, lx + 16, ly + 30, `800 24px ${SANS}`, '#fffdf9');
+  text(sub, lx + 16, ly + 54, `500 17px ${SANS}`, '#c9c1b3');
+  ctx.restore();
+
+  drawPanel(t, sc, stop, r);
+  ctx.restore();
+  if (flash > 0) { ctx.save(); ctx.globalAlpha = flash * oa; ctx.fillStyle = flashCol; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+}
+function niceStep(x) { const p = Math.pow(10, Math.floor(Math.log10(x))), m = x / p; return (m < 1.5 ? 1 : m < 3 ? 2 : m < 7 ? 5 : 10) * p; }
+
+const PANEL = { x: 1280, y: 232, w: 520, h: 766 };
+function drawPanel(t, sc, s, r) {
+  const { x, y, w, h } = PANEL;
+  const [pa, pdy] = reveal(t, sc.start + .25, .5, 30);
+  ctx.save(); ctx.globalAlpha *= pa; ctx.translate(0, pdy);
+  ctx.shadowColor = 'rgba(62,47,31,.12)'; ctx.shadowBlur = 40; ctx.shadowOffsetY = 14;
+  rrect(x, y, w, h, 26); ctx.fillStyle = C.card; ctx.fill(); ctx.shadowColor = 'transparent';
+  ctx.strokeStyle = s ? KIND[s.kind].col : C.line; ctx.lineWidth = 3; ctx.stroke();
+  if (!s) { caps('WAITING FOR THE FIRST RELEASE…', x + 40, y + 60, 18, C.muted); ctx.restore(); return; }
+  const K = KIND[s.kind], col = K.col;
+  // content switch: old out, new in
+  const next = sc.stops[sc.stops.indexOf(s) + 1];
+  const inP = easeOut(prog(t, s.tArrive - .15, s.tArrive + .25));
+  const outP = next ? easeIn(prog(t, next.tArrive - .35, next.tArrive - .15)) : 0;
+  const a = inP * (1 - outP), dx = (1 - inP) * 40 - outP * 40;
+  ctx.save(); ctx.globalAlpha *= a; ctx.translate(dx, 0);
+  const L = x + 44, IW = w - 80;
+  caps(s.kind === 'nolink' ? 'NO RELEASE NEARBY' : `RELEASE ${s.n} OF ${s.of}`, L, y + 54, 18, col);
+  text(s.kind === 'nolink' ? dateRange(s.date, r.days[s.i1].date) : dateRange(s.date, s.lastDate), L, y + 104, `700 40px ${SERIF}`, C.ink, 'left', 1, -.5);
+  // model chips
+  let cy = y + 130;
+  if (s.kind === 'nolink') {
+    const g = Math.abs(s.near.gap);
+    para(`Nearest release: ${s.nearName}, ${g} days ${s.near.gap < 0 ? 'earlier' : 'later'}.`, L, cy + 30, IW, `500 24px ${SANS}`, C.muted, 32);
+  } else {
+    let cx = L;
+    s.names.forEach((nm, k) => {
+      ctx.font = `800 21px ${SANS}`; const cw = ctx.measureText(nm).width + 30;
+      if (cx + cw > L + IW) { cx = L; cy += 48; }
+      const ca = easeOut(prog(t, s.tArrive + k * .05, s.tArrive + .3 + k * .05));
+      ctx.save(); ctx.globalAlpha *= ca;
+      rrect(cx, cy, cw, 38, 19); ctx.fillStyle = r.color; ctx.fill();
+      text(nm, cx + 15, cy + 26, `800 21px ${SANS}`, '#fff'); ctx.restore();
+      cx += cw + 10;
+    });
+  }
+  // verdict + delta (anchored from the bottom so layout never jumps)
+  const vb = y + 322;
+  const vp = backOut(clamp((t - s.tArrive - .1) / .4));
+  ctx.save(); ctx.translate(L, vb); ctx.scale(Math.max(0, vp), Math.max(0, vp));
+  ctx.font = `800 24px ${SANS}`; ctx.letterSpacing = '3px'; const vw = ctx.measureText(`${K.arrow} ${K.word}`).width + 40;
+  rrect(0, -34, vw, 48, 24); ctx.fillStyle = col; ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.fillText(`${K.arrow} ${K.word}`, 20, -1); ctx.restore();
+  text(K.short, L + vw + 16, vb - 3, `500 19px ${SANS}`, C.muted, 'left', clamp((t - s.tArrive - .2) / .3));
+  const cnt = s.delta * easeOut(prog(t, s.tArrive, s.tArrive + .9));
+  text(signed(cnt), L - 4, vb + 118, `700 100px ${SERIF}`, col, 'left', 1, -3);
+  text(`open issues in ${s.days} days  ·  ${pctS(s.pct)} of the backlog`, L, vb + 154, `600 20px ${SANS}`, C.muted);
+  // stats grid
+  const sy = vb + 206;
+  ctx.fillStyle = C.line; ctx.fillRect(L, sy - 22, IW, 2);
+  // [label, [[text, color, size]...]]
+  const xs = v => v == null ? '' : `  ${v.toFixed(1)}× normal`;
+  const xc = v => v == null ? C.muted : v >= 1.5 ? C.bust : v <= .67 ? C.boom : C.muted;
+  const stats = [
+    ['BACKLOG AT START', [[fmt(s.at), C.ink, 34]]],
+    [`OPENED · CLOSED, ${s.days}D`, [[fmt(s.opened), C.boom, 30], [' · ', C.muted, 30], [fmt(s.closed), C.bust, 30]]],
+    ['CLOSED/DAY, WEEK BEFORE', [[rateS(s.preRate), C.ink, 34], [xs(s.preX), xc(s.preX), 17]]],
+    ['CLOSED/DAY, 2 WEEKS AFTER', [[rateS(s.postRate), C.ink, 34], [xs(s.postX), xc(s.postX), 17]]]
+  ];
+  stats.forEach(([lbl, parts], k) => {
+    const gx = L + (k % 2) * (IW / 2 + 8), gy = sy + Math.floor(k / 2) * 70;
+    const sa = easeOut(prog(t, s.tArrive + .2 + k * .06, s.tArrive + .5 + k * .06));
+    caps(lbl, gx, gy + 10, 13, C.muted, 'left', sa, .1);
+    let px = gx;
+    for (const [str, c, size] of parts) {
+      const f = size >= 30 ? `700 ${size}px ${SERIF}` : `800 ${size}px ${SANS}`;
+      text(str, px, gy + 48, f, c, 'left', sa); ctx.font = f; px += ctx.measureText(str).width;
+    }
+  });
+  const note = s.preX >= 1.5 ? `Closing spiked to ${s.preX.toFixed(1)}× normal the week before release.` : s.notes[0];
+  if (note) para(note, L, y + h - 28 - (wrap(note, IW, `italic 400 21px ${SERIF}`).length - 1) * 28, IW, `italic 400 21px ${SERIF}`, s.preX >= 1.5 ? C.bust : C.muted, 28, easeOut(prog(t, s.tArrive + .35, s.tArrive + .7)));
+  ctx.restore();
+  ctx.restore();
+}
+
+// ---------- throughput ----------
+function drawThroughput(t, sc) {
+  const s = sc.start, oa = outA(t, sc);
+  const last = REPOS.codex.days.at(-1).date, first = REPOS.codex.days.at(-30).date;
+  const [ha, hdy] = reveal(t, s + .05, .45, 30);
+  caps(`ISSUES OPENED VS. CLOSED · LAST 30 DAYS (${dateRange(first, last).toUpperCase()})`, 150, 160 + hdy, 22, C.muted, 'left', ha * oa);
+  text('Who’s keeping up?', 150, 250 + hdy, `700 88px ${SERIF}`, C.ink, 'left', ha * oa, -2);
+  const max = Math.max(...['codex', 'claude'].flatMap(k => [REPOS[k].last30.opened, REPOS[k].last30.closed]));
+  ['codex', 'claude'].forEach((k, i) => {
+    const r = REPOS[k], y = 360 + i * 320, t0 = s + .5 + i * .6;
+    const [a, d] = reveal(t, t0, .5, 40);
+    ctx.save(); ctx.globalAlpha = a * oa; ctx.translate(0, d);
+    rrect(150, y, 1620, 280, 26); ctx.fillStyle = C.card; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 2; ctx.stroke();
+    caps(r.slug.toUpperCase(), 200, y + 56, 22, r.color);
+    const bars = [['opened', r.last30.opened, C.boom], ['closed', r.last30.closed, C.bust]];
+    bars.forEach(([lbl, v, col], j) => {
+      const by = y + 100 + j * 76, p = easeOut(prog(t, t0 + .3 + j * .15, t0 + 1.3 + j * .15));
+      text(lbl, 200, by + 30, `600 26px ${SANS}`, C.muted);
+      rrect(330, by + 6, 820, 34, 17); ctx.fillStyle = '#efe9de'; ctx.fill();
+      rrect(330, by + 6, Math.max(34, 820 * v / max * p), 34, 17); ctx.fillStyle = col; ctx.fill();
+      text(fmt(v * p), 1170, by + 34, `700 36px ${SERIF}`, col);
+    });
+    const ratio = Math.round(100 * r.last30.closed / r.last30.opened);
+    const rp = easeOut(prog(t, t0 + .8, t0 + 1.8));
+    text(String(Math.round(ratio * rp)), 1720, y + 170, `700 150px ${SERIF}`, ratio >= 100 ? C.bust : C.boom, 'right', 1, -5);
+    text('closed per 100 opened', 1720, y + 212, `600 24px ${SANS}`, C.muted, 'right');
+    text(`All-time: ${fmt(r.closed)} of ${fmt(r.opened)} issues closed (${Math.round(100 * r.closed / r.opened)}%)`, 200, y + 254, `italic 400 24px ${SERIF}`, C.muted, 'left', easeOut(prog(t, t0 + 1.2, t0 + 1.7)));
+    ctx.restore();
+  });
+}
+
+// ---------- leaderboard ----------
+function drawLeaderboard(t, sc) {
+  const s = sc.start, oa = outA(t, sc);
+  const rows = TL.releaseStops.map(st => ({ st, repo: REPOS.codex.stops.includes(st) ? 'codex' : 'claude' })).sort((a, b) => a.st.delta - b.st.delta);
+  const [ha, hdy] = reveal(t, s + .05, .45, 30);
+  caps(`ALL ${rows.length} RELEASE MOMENTS · OPEN-ISSUE CHANGE OVER THE NEXT 14 DAYS`, 150, 130 + hdy, 22, C.muted, 'left', ha * oa);
+  text('The ranking: best for the backlog first', 150, 200 + hdy, `700 64px ${SERIF}`, C.ink, 'left', ha * oa, -1.5);
+  // legend
+  let lx = 1800;
+  [['Claude Code', C.claude], ['Codex', C.codex]].forEach(([l, c]) => {
+    ctx.font = `700 22px ${SANS}`; const w = ctx.measureText(l).width; lx -= w;
+    text(l, lx, 196 + hdy, `700 22px ${SANS}`, C.ink, 'left', ha * oa);
+    ctx.save(); ctx.globalAlpha = ha * oa; ctx.fillStyle = c; ctx.beginPath(); ctx.arc(lx - 16, 188 + hdy, 8, 0, 7); ctx.fill(); ctx.restore(); lx -= 50;
+  });
+  const top = 234, rh = 22.4, axis = 1180, scale = 430 / Math.max(...rows.map(r => Math.abs(r.st.delta)));
+  ctx.save(); ctx.globalAlpha = oa * ha; ctx.fillStyle = '#c9c1b3'; ctx.fillRect(axis - 1, top - 6, 2, rows.length * rh + 4); ctx.restore();
+  rows.forEach(({ st, repo }, k) => {
+    const y = top + k * rh, t0 = s + .35 + k * .045;
+    const a = easeOut(prog(t, t0, t0 + .35)), bp = easeOut(prog(t, t0 + .1, t0 + .7));
+    const col = KIND[st.kind].col, r = REPOS[repo];
+    ctx.save(); ctx.globalAlpha = a * oa;
+    ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(160, y + 10, 6, 0, 7); ctx.fill();
+    const names = st.names.length > 2 ? `${st.names.slice(0, 2).join(' + ')} +${st.names.length - 2}` : st.names.join(' + ');
+    text(names, 178, y + 17, `700 18px ${SANS}`, C.ink);
+    text(dt(st.date, { month: 'short', year: '2-digit' }).replace(' ', " '"), 640, y + 17, `500 16px ${SANS}`, C.muted, 'right');
+    const bw = Math.abs(st.delta) * scale * bp, bx = st.delta >= 0 ? axis : axis - bw;
+    ctx.fillStyle = col; rrect(bx, y + 3, Math.max(3, bw), rh - 7, 4); ctx.fill();
+    text(signed(st.delta * bp), st.delta >= 0 ? axis + bw + 10 : axis - bw - 10, y + 17, `700 17px ${SANS}`, col, st.delta >= 0 ? 'left' : 'right');
+    ctx.restore();
+  });
+  const c = TL.counts, [fa] = reveal(t, s + 2.2, .5, 0);
+  const fx = 1680;
+  [['bust', c.bust], ['shrug', c.shrug], ['boom', c.boom]].forEach(([k, v], i) => {
+    const K = KIND[k], y = 360 + i * 150;
+    text(String(v), fx, y + 80, `700 104px ${SERIF}`, K.col, 'left', fa * oa, -3);
+    caps(`${K.arrow} ${K.word}`, fx + 4, y + 118, 20, K.col, 'left', fa * oa);
+  });
+}
+
+// ---------- takeaways ----------
+function drawTakeaways(t, sc) {
+  const s = sc.start, oa = outA(t, sc);
+  const cx = REPOS.codex, cl = REPOS.claude;
+  const rc = TL.rate(cx, 'boom'), rl = TL.rate(cl, 'boom');
+  const pc = n => Math.round(n * 100) + '%';
+  const rel = (r, m) => { const nm = r.releases.filter(e => e.date === m.near.x).map(e => e.shortLabel).join(' + '), g = m.near.gap; return g === 0 ? `began the day ${nm} shipped` : g > 0 ? `began ${g} days before ${nm} shipped` : `began ${-g} days after ${nm} shipped`; };
+  const nl = cl.stops.filter(x => x.kind === 'nolink');
+  const minGap = Math.min(...[...cx.stops, ...cl.stops].filter(x => x.kind === 'nolink').map(x => Math.abs(x.near.gap)));
+  const items = [
+    ['On average, a release week looks like any other.', `After ${rc.n} of ${rc.of} Codex releases (${pc(rc.n / rc.of)}), the backlog grew by 10% or more, which happened in ${pc(cx.base.boom)} of all 14-day stretches anyway. For Claude Code it was ${pc(rl.n / rl.of)} vs. ${pc(cl.base.boom)}.`],
+    ['But the biggest swings sit right next to launches.', `Codex’s largest 14-day jump (${signed(cx.maxUp.d)}) ${rel(cx, cx.maxUp)}. Claude Code’s largest drop (${signed(cl.maxDown.d)}) ${rel(cl, cl.maxDown)}.`],
+    ['And some had nothing to do with a release.', `Claude Code went ${signed(nl[0].delta)} from ${dt(nl[0].date, { month: 'short', day: 'numeric' })} and ${signed(nl[1].delta)} from ${dt(nl[1].date, { month: 'short', day: 'numeric' })}; Codex went ${signed(cx.stops.find(x => x.kind === 'nolink').delta)} from ${dt(cx.stops.find(x => x.kind === 'nolink').date, { month: 'short', day: 'numeric' })}. No release came within ${Math.floor(minGap / 7)} weeks of any of them.`],
+    ['No sign of a quiet cleanup before launch.', `In the week before a release, the median closing rate was ${cx.study.pre.toFixed(2)}× normal for Codex and ${cl.study.pre.toFixed(2)}× for Claude Code. Exceptions: ${TL.scenes.find(x => x.type === 'prerelease').spikes.slice(0, 3).map(x => `${x.names[0]} (${x.preX.toFixed(1)}×)`).join(', ')}.`]
+  ];
+  const [ha, hdy] = reveal(t, s + .05, .45, 30);
+  caps('TAKEAWAYS', 150, 130 + hdy, 22, C.event, 'left', ha * oa, .2);
+  text('So, do model releases move the backlog?', 150, 204 + hdy, `700 64px ${SERIF}`, C.ink, 'left', ha * oa, -1.5);
+  items.forEach(([head, body], i) => {
+    const t0 = s + sc.items[i], y = 260 + i * 182, [a, d] = reveal(t, t0, .5, 40);
+    ctx.save(); ctx.globalAlpha = a * oa; ctx.translate(0, d);
+    text(String(i + 1), 150, y + 62, `700 80px ${SERIF}`, [C.shrug, C.boom, C.nolink, C.bust][i]);
+    text(head, 250, y + 46, `700 42px ${SERIF}`, C.ink, 'left', 1, -.8);
+    para(body, 252, y + 88, 1520, `500 25px ${SANS}`, C.muted, 34);
+    ctx.restore();
+  });
+}
+
+// ---------- pre-release closing study ----------
+function drawPrerelease(t, sc) {
+  const s = sc.start, oa = outA(t, sc);
+  const [ha, hdy] = reveal(t, s + .05, .45, 30);
+  caps('ISSUES CLOSED PER DAY AROUND EACH RELEASE · 1.0× = NORMAL', 150, 130 + hdy, 22, C.muted, 'left', ha * oa);
+  text('Do labs clean up before a launch?', 150, 204 + hdy, `700 64px ${SERIF}`, C.ink, 'left', ha * oa, -1.5);
+  // plot
+  const P = { x0: 230, x1: 1150, y0: 300, y1: 880, lo: .4, hi: 2.0 };
+  const PX = off => lerp(P.x0, P.x1, (off + 21) / 42), PY = v => lerp(P.y1, P.y0, (clamp(v, P.lo, P.hi) - P.lo) / (P.hi - P.lo));
+  const [ga, gdy] = reveal(t, s + .3, .5, 20);
+  ctx.save(); ctx.globalAlpha = ga * oa; ctx.translate(0, gdy);
+  ctx.fillStyle = 'rgba(31,143,77,.12)'; ctx.fillRect(PX(-7), P.y0, PX(0) - PX(-7), P.y1 - P.y0);
+  caps('WEEK BEFORE', (PX(-7) + PX(0)) / 2, P.y0 + 24, 15, C.bust, 'center', 1, .12);
+  for (const v of [.5, 1, 1.5, 2]) {
+    ctx.strokeStyle = v === 1 ? '#a9a194' : 'rgba(137,145,142,.2)'; ctx.lineWidth = v === 1 ? 2 : 1; if (v === 1) ctx.setLineDash([8, 6]);
+    ctx.beginPath(); ctx.moveTo(P.x0, PY(v)); ctx.lineTo(P.x1, PY(v)); ctx.stroke(); ctx.setLineDash([]);
+    text(v.toFixed(1) + '×', P.x0 - 14, PY(v) + 6, `500 18px ${SANS}`, C.axis, 'right');
+  }
+  text('normal', P.x0 - 14, PY(1) + 28, `italic 400 18px ${SERIF}`, C.muted, 'right');
+  ctx.strokeStyle = C.event; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(PX(0), P.y0 - 10); ctx.lineTo(PX(0), P.y1); ctx.stroke();
+  caps('RELEASE DAY', PX(0) + 10, P.y0 + 4, 15, C.event, 'left', 1, .12);
+  for (const off of [-21, -14, -7, 0, 7, 14, 21]) text(off === 0 ? '0' : (off > 0 ? '+' : '−') + Math.abs(off) + 'd', PX(off), P.y1 + 34, `500 18px ${SANS}`, C.axis, 'center');
+  ctx.restore();
+  ['codex', 'claude'].forEach((k, j) => {
+    const r = REPOS[k], pr = r.study.profile, p = easeInOut(prog(t, s + .7 + j * .5, s + 3.2 + j * .5));
+    const upto = -21 + 42 * p;
+    ctx.save(); ctx.globalAlpha = oa; ctx.strokeStyle = r.color; ctx.lineWidth = 5; ctx.lineJoin = 'round';
+    ctx.beginPath(); pr.forEach((q, i) => { if (q.off > upto) return; i ? ctx.lineTo(PX(q.off), PY(q.v)) : ctx.moveTo(PX(q.off), PY(q.v)); }); ctx.stroke();
+    if (p > 0 && p < 1) { const q = pr[Math.min(pr.length - 1, Math.floor(upto + 21))]; ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(PX(q.off), PY(q.v), 8, 0, 7); ctx.fill(); }
+    if (p >= 1) { const q = pr.at(-1); text(k === 'codex' ? 'Codex' : 'Claude Code', PX(21) + 10, PY(q.v) + 7 + (k === 'codex' ? 14 : -14), `800 20px ${SANS}`, r.color); }
+    ctx.restore();
+  });
+  // right column: medians + exceptions
+  const RX = 1290;
+  const [ma, mdy] = reveal(t, s + 3.4, .5, 30);
+  ctx.save(); ctx.globalAlpha = ma * oa; ctx.translate(0, mdy);
+  caps('MEDIAN CLOSING RATE VS. NORMAL', RX, 318, 16, C.muted, 'left', 1, .12);
+  text('week before', RX + 340, 356, `600 18px ${SANS}`, C.muted, 'right'); text('2 weeks after', RX + 490, 356, `600 18px ${SANS}`, C.muted, 'right');
+  ['codex', 'claude'].forEach((k, j) => {
+    const r = REPOS[k], y = 410 + j * 58;
+    ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(RX + 8, y - 9, 8, 0, 7); ctx.fill();
+    text(r.short, RX + 26, y, `700 24px ${SANS}`, C.ink);
+    text(r.study.pre.toFixed(2) + '×', RX + 340, y + 2, `700 34px ${SERIF}`, C.ink, 'right');
+    text(r.study.post.toFixed(2) + '×', RX + 490, y + 2, `700 34px ${SERIF}`, r.study.post >= 1.1 ? C.bust : C.ink, 'right');
+  });
+  ctx.restore();
+  const [ea, edy] = reveal(t, s + 5.0, .5, 30);
+  ctx.save(); ctx.globalAlpha = ea * oa; ctx.translate(0, edy);
+  caps('EXCEPTIONS: ≥ 1.5× CLOSING THE WEEK BEFORE', RX, 560, 16, C.bust, 'left', 1, .12);
+  sc.spikes.slice(0, 4).forEach((x, i) => {
+    const r = REPOS[x.repo], y = 604 + i * 54;
+    ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(RX + 8, y - 9, 8, 0, 7); ctx.fill();
+    text(x.names.join(' + '), RX + 26, y, `700 23px ${SANS}`, C.ink);
+    text(`${x.preX.toFixed(1)}×`, RX + 470, y + 2, `700 32px ${SERIF}`, C.bust, 'right');
+    text(`${dt(x.date, { month: 'short', day: 'numeric', year: 'numeric' })} · ${rateS(x.preRate)}/day vs ${rateS(x.base)}`, RX + 26, y + 24, `500 16px ${SANS}`, C.muted);
+  });
+  ctx.restore();
+  const [fa] = reveal(t, s + 6.2, .5, 0);
+  para('Verdict: release weeks close issues at the usual pace; only a few launches had a pre-release burst. Who closed each issue (people or bots) isn’t in this snapshot.', RX, 810, 500, `italic 400 22px ${SERIF}`, C.ink, 30, fa * oa);
+}
+
+// ---------- outro ----------
+function drawOutro(t, sc) {
+  const s = sc.start;
+  const [ea, edy] = reveal(t, s + .05, .4, 20);
+  caps('OPEN SOURCE SIGNALS / ISSUE ACTIVITY', W / 2, 220 + edy, 24, C.event, 'center', ea, .24);
+  const [a, dy] = reveal(t, s + .15, .55, 60);
+  ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, 400 + dy); const sc2 = lerp(1.06, 1, easeOut(prog(t, s + .15, s + 1.4))); ctx.scale(sc2, sc2);
+  ctx.font = `700 210px ${SERIF}`; ctx.letterSpacing = '-12px'; ctx.textAlign = 'center'; ctx.fillStyle = C.ink; ctx.fillText('Issue with AI', 0, 0); ctx.restore();
+  const [la, ldy] = reveal(t, s + .5, .45, 30);
+  text('Can capability keep up with complexity?', W / 2, 495 + ldy, `italic 400 50px ${SERIF}`, C.muted, 'center', la);
+  [['codex', 'openai/codex'], ['claude', 'anthropics/claude-code']].forEach(([k, slug], i) => {
+    const r = REPOS[k], [pa, pdy] = reveal(t, s + .8 + i * .15, .45, 30);
+    const label = `${slug}  ·  ${fmt(r.open)} open`;
+    ctx.save(); ctx.globalAlpha = pa; ctx.font = `700 32px ${SANS}`; const w = ctx.measureText(label).width + 80;
+    const x = i === 0 ? W / 2 - 20 - w : W / 2 + 20, y = 560 + pdy;
+    rrect(x, y, w, 76, 38); ctx.fillStyle = C.card; ctx.fill(); ctx.strokeStyle = r.color; ctx.lineWidth = 3; ctx.stroke();
+    ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(x + 38, y + 38, 9, 0, 7); ctx.fill();
+    ctx.fillStyle = C.ink; ctx.textBaseline = 'middle'; ctx.fillText(label, x + 60, y + 40); ctx.restore();
+  });
+  // where to explore it: the site, big and dark so it reads at a glance
+  const [ua, udy] = reveal(t, s + 1.1, .5, 30);
+  const url = 'movy.github.io/issue-with-ai';
+  ctx.save(); ctx.globalAlpha = ua; ctx.font = `800 40px ${SANS}`;
+  const uw = ctx.measureText(url).width + 214, ux = W / 2 - uw / 2, uy = 690 + udy;
+  rrect(ux, uy, uw, 88, 44); ctx.fillStyle = C.ink; ctx.fill();
+  ctx.fillStyle = '#f39ab5'; ctx.font = `800 20px ${SANS}`; ctx.letterSpacing = '3px'; ctx.fillText('EXPLORE', ux + 40, uy + 53);
+  ctx.letterSpacing = '0px'; ctx.font = `800 40px ${SANS}`; ctx.fillStyle = '#fffdf9'; ctx.fillText(url, ux + 170, uy + 58);
+  ctx.restore();
+  const [fa] = reveal(t, s + 1.5, .5, 0);
+  text('Release dates line up with backlog moves. That’s correlation, not causation.', W / 2, 870, `500 26px ${SANS}`, C.muted, 'center', fa);
+  text(`Data: GitHub GraphQL API snapshot, ${dt(DATA.generatedAt.slice(0, 10))} · releases via aireleasetracker.com and official announcements`, W / 2, 910, `500 21px ${SANS}`, C.axis, 'center', fa);
+  text('Code: github.com/movy/issue-with-ai  ·  Film made with the brag skill: github.com/latent-spaces/brag', W / 2, 950, `600 21px ${SANS}`, C.muted, 'center', fa);
+}
+
+// ---------- chrome: wipes + progress ----------
+function drawWipe(t, t0, color, label) {
+  const a = prog(t, t0 - .32, t0), b = prog(t, t0, t0 + .32);
+  if (a <= 0 || b >= 1) return;
+  const lead = lerp(-350, W + 350, easeInOut(a)), trail = lerp(-350, W + 350, easeInOut(b));
+  const path = () => { ctx.beginPath(); ctx.moveTo(trail + 150, 0); ctx.lineTo(lead + 150, 0); ctx.lineTo(lead - 150, H); ctx.lineTo(trail - 150, H); ctx.closePath(); };
+  ctx.save(); path(); ctx.fillStyle = color; ctx.fill(); ctx.clip();
+  ctx.font = `800 44px ${SANS}`; ctx.letterSpacing = '10px'; ctx.textAlign = 'center'; ctx.fillStyle = '#fffdf9';
+  ctx.fillText(label, W / 2 + lerp(80, -80, prog(t, t0 - .32, t0 + .32)), H / 2 + 16); ctx.restore();
+}
+function drawProgress(t) {
+  const a = prog(t, 4.5, 5.2) * (1 - prog(t, TL.total - 5.5, TL.total - 5));
+  if (a <= 0) return;
+  const x0 = 150, x1 = 1770, y = 1030, X = v => lerp(x0, x1, v / TL.total);
+  ctx.save(); ctx.globalAlpha = a;
+  rrect(x0, y, x1 - x0, 5, 3); ctx.fillStyle = 'rgba(137,145,142,.25)'; ctx.fill();
+  rrect(x0, y, X(t) - x0, 5, 3); ctx.fillStyle = C.event; ctx.fill();
+  TL.chapters.forEach(([lbl, st], i) => {
+    const nxt = TL.chapters[i + 1] ? TL.chapters[i + 1][1] : TL.total, active = t >= st && t < nxt;
+    ctx.fillStyle = active ? C.event : '#b9b1a4'; ctx.fillRect(X(st) - 1, y - 6, 2, 17);
+    caps(lbl.toUpperCase(), X(st) + 8, y - 10, 13, active ? C.event : C.axis, 'left', 1, .14);
+  });
+  ctx.restore();
+}
+
+// ---------- frame ----------
+const DRAW = { hook: drawHook, intro: drawIntro, chapter: drawChapter, chart: drawChart, prerelease: drawPrerelease, throughput: drawThroughput, leaderboard: drawLeaderboard, takeaways: drawTakeaways, outro: drawOutro };
+window.renderFrame = function (t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1;
+  ctx.fillStyle = C.paper; ctx.fillRect(0, 0, W, H);
+  const vg = ctx.createRadialGradient(W / 2, H / 2, 300, W / 2, H / 2, 1250);
+  vg.addColorStop(0, 'rgba(255,253,249,.6)'); vg.addColorStop(1, 'rgba(221,215,204,.35)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  for (const sc of scenes) if (t >= sc.start && t < sc.end + (sc.type === 'hook' ? .05 : 0)) { ctx.save(); DRAW[sc.type](t, sc); ctx.restore(); }
+  if (t >= scenes.at(-1).end) DRAW.outro(t, scenes.at(-1));
+  drawProgress(t);
+  for (const sc of scenes) {
+    if (sc.type === 'chapter') drawWipe(t, sc.start, REPOS[sc.repo].color, REPOS[sc.repo].label);
+    if (sc.type === 'prerelease') drawWipe(t, sc.start, C.bust, 'CLEANUP BEFORE LAUNCH?');
+  }
+};
+window.ready = document.fonts.ready.then(() => true);
+window.TOTAL = TL.total;
+</script>
+</body>
+</html>

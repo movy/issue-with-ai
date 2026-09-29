@@ -3,34 +3,86 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="A static observatory of issue activity in OpenAI Codex and Anthropic Claude Code." />
-    <title>Issue with AI — issue activity observatory</title>
+    <meta name="description" content="Do new AI model releases move the issue backlog of OpenAI Codex and Anthropic Claude Code? A data film and interactive charts built from every public issue." />
+    <meta property="og:title" content="Issue with AI" />
+    <meta property="og:description" content="52 model releases vs. every public issue in openai/codex and anthropics/claude-code." />
+    <meta property="og:image" content="media/issue-with-ai-poster.jpg" />
+    <title>Issue with AI: do model releases move the backlog?</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <header class="site-header">
-      <div class="eyebrow">OPEN SOURCE SIGNALS / ISSUE ACTIVITY</div>
-      <h1>Issue with AI</h1>
-      <p class="lede">A calm, source-linked view of how two prominent coding-agent repositories evolve over time.</p>
-      <div class="header-meta" id="snapshot-meta">Loading snapshot metadata…</div>
+    <nav class="topnav" aria-label="Sections">
+      <a class="brand" href="#top"><span class="brand-dot" aria-hidden="true"></span>Issue with AI</a>
+      <div class="topnav-links">
+        <a href="#film">Film</a>
+        <a href="#findings">Findings</a>
+        <a href="#repo-openai-codex">Codex</a>
+        <a href="#repo-anthropics-claude-code">Claude Code</a>
+        <a href="#method">Method</a>
+        <a class="nav-github" href="https://github.com/movy/issue-with-ai" target="_blank" rel="noreferrer"><svg aria-hidden="true" viewBox="0 0 16 16" width="15" height="15" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>GitHub</a>
+      </div>
+    </nav>
+
+    <header class="hero" id="top">
+      <div class="hero-inner">
+        <h1>Issue with&nbsp;AI</h1>
+        <p class="hero-question">Does a new AI model make its own coding agent’s bug tracker better or worse?</p>
+        <p class="lede">Every few weeks OpenAI or Anthropic ships a new model. Both labs also run public GitHub trackers for their coding agents. We lined up <b data-release-count>52</b> model and product releases against every issue ever filed in <a href="https://github.com/openai/codex/issues">openai/codex</a> and <a href="https://github.com/anthropics/claude-code/issues">anthropics/claude-code</a>. For each release, we measured how the backlog of open issues changed over the next 14 days. The data, code and method are all <a href="https://github.com/movy/issue-with-ai">on GitHub</a>.</p>
+        <div class="header-meta" id="snapshot-meta">Loading snapshot…</div>
+
+        <figure class="film" id="film">
+          <div class="film-frame">
+            <video controls playsinline preload="metadata" poster="media/issue-with-ai-poster.jpg">
+              <source src="media/issue-with-ai.mp4" type="video/mp4" />
+              Your browser can’t play this video. <a href="media/issue-with-ai.mp4">Download it</a>.
+            </video>
+          </div>
+          <figcaption><span>▶ 2:20 data film</span>Every number in it comes from the same snapshot as the charts below. Made with the <a href="https://github.com/latent-spaces/brag" target="_blank" rel="noreferrer">brag</a> skill for Claude Code.</figcaption>
+        </figure>
+      </div>
     </header>
 
+    <section class="findings" id="findings" aria-labelledby="findings-title">
+      <div class="section-head">
+        <h2 id="findings-title">On average, launches don’t move the backlog. The extremes are another story.</h2>
+        <p class="section-lede" id="verdict-summary"></p>
+      </div>
+      <div id="findings-body"></div>
+      <p class="caveat">Release dates line up with backlog moves; that’s correlation, not causation. The snapshot doesn’t record who closed an issue, so bot clean-ups and human triage look the same.</p>
+    </section>
+
     <main>
-      <section class="intro-card" aria-labelledby="reading-title">
+      <section class="read-card" aria-labelledby="reading-title">
         <div>
-          <div class="eyebrow">HOW TO READ THIS</div>
-          <h2 id="reading-title">Activity, not a scoreboard</h2>
+          <h2 id="reading-title">Each numbered flag is a release. Its number is the backlog change in the next 14 days.</h2>
         </div>
-        <p>Bars show issues opened and closed per UTC day. The lower area chart shows the number of issues still unclosed at each day’s close. Release and model events are annotations only; they are not claims about causality or product quality.</p>
+        <ul class="read-legend">
+          <li><i class="swatch area-swatch" style="background:#7951a8"></i><b>Purple area</b> Open issues. The axis rescales to whatever is on screen.</li>
+          <li><i class="swatch" style="background:#d4507a"></i><b>Strip underneath</b> Issues opened per day grow up in pink; issues closed grow down in green.</li>
+          <li><i class="verdict-pill" style="--v:#c24369">↑ Boom</i> Backlog grew by 10% or more. <i class="verdict-pill" style="--v:#1f8f4d">↓ Bust</i> It shrank by 5% or more. <i class="verdict-pill" style="--v:#687482">~ Shrug</i> Anything in between.</li>
+          <li><i class="verdict-pill" style="--v:#5a4a8a">? No release</i> A big 14-day swing with no release within two weeks either side.</li>
+        </ul>
       </section>
 
       <div id="repo-sections" class="repo-sections" aria-live="polite"></div>
+
+      <section class="method-card" id="method" aria-labelledby="method-title">
+        <h2 id="method-title">How the numbers are made</h2>
+        <div class="method-grid">
+          <div><h3>Backlog</h3><p>Every issue in each repository comes from the GitHub GraphQL API (pull requests excluded). “Open issues” is the end-of-day count, by UTC calendar date.</p></div>
+          <div><h3>Release moments</h3><p>Releases come from <a href="https://aireleasetracker.com/">AI Release Tracker</a> and official announcements. Releases within 7 days of each other are grouped and measured from the first one.</p></div>
+          <div><h3>Verdicts</h3><p>The change in open issues from the release day to 14 days later, as a share of the backlog on release day: at least +10% is a boom, −5% or lower is a bust.</p></div>
+          <div><h3>Closing before a launch</h3><p>Issues closed per day in the 7 days before a release, divided by the rate 8–35 days before. 1.0× means business as usual.</p></div>
+        </div>
+      </section>
     </main>
 
     <footer class="site-footer">
       <span>Built from a committed GitHub API snapshot. No runtime API calls.</span>
-      <a href="https://github.com/openai/codex/issues">Codex issues</a>
-      <a href="https://github.com/anthropics/claude-code/issues">Claude Code issues</a>
+      <a href="https://github.com/openai/codex/issues">Codex issues ↗</a>
+      <a href="https://github.com/anthropics/claude-code/issues">Claude Code issues ↗</a>
+      <a href="https://github.com/movy/issue-with-ai">Source on GitHub ↗</a>
+      <a href="https://github.com/latent-spaces/brag">Film made with brag ↗</a>
     </footer>
 
     <script type="module" src="app.js"></script>
